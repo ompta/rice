@@ -299,6 +299,55 @@ html.touch .stats {
   background: #eef6dc;
 }
 
+/* ---------------------------------------------------------- the sickle -- */
+/* The line the sickle has drawn is one polyline over the whole glass rather
+   than geometry in front of the field: the stroke belongs to the glass, so it
+   stays put while the viewer walks, and it is pointer-transparent so it can
+   never eat the click that follows a swipe. The svg is sized in CSS px, which
+   makes its user units the very canvas pixels the reaping measured - the points
+   app.js writes are the points the blade cut on. The wide translucent band is
+   the blade's reach (the same band reapSickle uses), the pale line on top is
+   where the hand actually went. */
+.stroke {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  pointer-events: none;
+  z-index: 6;
+}
+
+.stroke polyline#stroke-band {
+  fill: none;
+  stroke: rgba(159, 192, 106, 0.22);
+  stroke-width: 25;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.stroke polyline#stroke-line {
+  fill: none;
+  stroke: rgba(238, 246, 220, 0.78);
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* the sickle row is one button that flips a mode rather than a row that picks
+   one of two framings, so it keeps the panel's rhythm: same gap, same height,
+   and the .on state the view buttons already use is what says the blade is
+   drawn. On a phone the bar is three rows deep rather than two, which is what
+   leaves the thumb pad its glass - the pad is placed off the bar's top edge
+   rather than in a fixed corner */
+.tool button {
+  min-width: 46px;
+  text-align: center;
+}
+
+html.touch .tool button {
+  min-height: 32px;
+}
+
 .skill .needle {
   position: absolute;
   top: -4px;

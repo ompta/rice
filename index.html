@@ -43,6 +43,16 @@
         <button data-action="view" data-value="among">Among the rice</button>
       </div>
 
+      <!--
+        the sickle toggle is one button rather than a pair: it flips a mode, so
+        the button itself says which mode is live by carrying .on, which is the
+        same state app.js reads for the pointer handlers
+      -->
+      <div class="row tool">
+        <span class="label">Sickle</span>
+        <button data-action="sickle">Sickle</button>
+      </div>
+
       <div class="row rig">
         <span class="label">Elevate</span>
         <button class="hold" data-hold="1">Rise</button>
@@ -54,8 +64,8 @@
       The hour has no buttons here any more: it walks itself through morning,
       afternoon and golden hour on the frame clock (one minute each by default, ?light=
       pins one). Wind, pause and the walk are keyboard-only - Shift+Arrow nudges
-      the wind, Space toggles pause, the arrow keys / WASD walk. The rig row stays
-      because a phone has no E / Q.
+      the wind, Space toggles pause, k draws or sheathes the sickle, and the arrow
+      keys / WASD walk. The rig row stays because a phone has no E / Q.
     -->
 
     <!--
@@ -77,6 +87,18 @@
       <div class="needle" id="skill-needle"></div>
       <div class="verdict" id="skill-verdict"></div>
     </div>
+
+    <!--
+      The line the sickle has drawn lives here rather than in the scene: the
+      stroke belongs to the glass, so it is one polyline whose points are the very
+      numbers the reaping ran on, it is pointer-transparent so it can never eat a
+      click, and a harness can read it back out of the markup. app.js writes the
+      points and hides the element between swipes.
+    -->
+    <svg id="stroke" class="stroke" aria-label="The line the sickle has drawn" style="display: none">
+      <polyline id="stroke-band" points=""></polyline>
+      <polyline id="stroke-line" points=""></polyline>
+    </svg>
 
     <div id="stats" class="stats"></div>
     <div id="err" class="err"></div>

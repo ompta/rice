@@ -14,6 +14,10 @@
 //                 pass cuts the plant
 //   cut fragments a pass also slices the plant: five slivers of leaf tear off
 //                 at the cut plane and fall, all of them one InstancedMesh
+//   sickle        a toggle on the panel hands the pointer over to a sickle: a
+//                 held drag (a flick on a phone) draws a line for a second
+//                 instead of turning the view, and every plant the line passes
+//                 over is cut at the stubble
 //   sound         golden hour loops the evening cicada and the skill check
 //                 answers itself: a great cut, an ordinary cut, a miss
 //
@@ -43,6 +47,7 @@ export const state = {
   view: "open",
   quality: "high",
   walk: true, // free camera walking: arrow keys / WASD move, a held drag looks
+  sickle: false, // the sickle drawn on the panel: a held drag reaps instead of looking
   touch: false, // touch controls armed: a thumb pad walks, a tap arms the check
 };
 
@@ -81,6 +86,9 @@ export const params = (() => {
     autotest: num( "autotest", 0 ) > 0,
     walk: num( "walk", 1 ) > 0, // 0 = keep the camera locked to the preset framings
     touch: num( "touch", 0 ) > 0, // 1 = force the phone layout on a desktop
+    // 1 = start with the sickle already drawn, so a harness can drive a swipe
+    // without first clicking the panel
+    sickle: num( "sickle", 0 ) > 0,
   };
 })();
 
@@ -90,6 +98,7 @@ state.view = params.view;
 state.paused = params.paused;
 state.quality = params.quality;
 state.walk = params.walk;
+state.sickle = params.sickle;
 
 // A phone or tablet has no keys, so it gets its own control set: a thumb pad for
 // walking, hold-to-press elevation buttons, and a tap (never a drag) to arm the
@@ -311,6 +320,12 @@ export function build() {
   // One InstancedMesh for every fragment the whole session will throw, so a cut
   // costs no draw call and no allocation. See spawnCutFx / stepFx below.
   buildFx();
+
+  // --- the sickle -----------------------------------------------------------
+  // The one item the viewer can hold: it rides the camera and takes the scene's
+  // own lights, so it is a real object in the field rather than a HUD decal.
+  // See reapSickle / stepSickle below.
+  buildSickle();
 
   return { renderer, scene, camera };
 }
@@ -1003,6 +1018,356 @@ export function stepFx( dt ) {
   if ( touched ) f.mesh.instanceMatrix.needsUpdate = true;
 }
 
+// ---------------------------------------------------------------------------
+// The sickle: the item the viewer holds, and the reaping it does.
+//
+// Drawing the sickle on the panel hands the pointer over to it. A held drag -
+// a flick on a phone - then draws a line on the glass for as long as a second
+// and never touches the camera: every standing plant whose stem projects within
+// a blade's width of the line just drawn is cut at the stubble, so the swathe
+// follows the hand rather than the view.
+//
+// The pick is the hover pick seen from the other side. pickPlant asks "which
+// stem is nearest this one point"; reapSickle asks "which stems are near this
+// line", and both answer it by pushing each plant's root and tip through the
+// same camera matrix and measuring in canvas pixels - no ray against three
+// thousand plants, and no world-space unprojection of the stroke either. The
+// stroke stays on the glass because the glass is where the hand drew it.
+//
+// The item itself is one mesh, one material, one draw call: a grip and a
+// crescent blade authored as ribbons in one geometry and told apart by vertex
+// colour, the same way the tree trunks and the cut fragments are. It rides the
+// camera as a scene child whose pose is copied over each frame, so it keeps its
+// place in the frame whatever the viewer walks to, and it is hidden outright
+// while the sickle is sheathed - which is why a field at rest still draws the
+// same twelve calls it always did.
+// ---------------------------------------------------------------------------
+export const SICKLE = {
+  draw: 1.0, // seconds a swipe may keep drawing for: a swipe, not a stroke
+  band: 12, // canvas px either side of the line the blade reaches
+  stub: 0.14, // stubble a sickle leaves, as a share of the plant's height
+  vary: 0.06, // how much that stubble wanders along one swathe
+  swish: 8, // plants one swipe has to clear to earn the great cue
+  // plants one swipe may take at most. It is pinned to the fragment pool: a cut
+  // throws CUT_FX.perts fragments and the pool is the one draw call's slots, so
+  // at this number a whole swathe's bursts still fit without recycling a live
+  // slot - a flick cannot mow the field, and it cannot spend the fx pool either
+  max: 18,
+  // where the item sits in the frame: right of centre, below the horizon,
+  // about arm's length from the eye - all camera-space metres
+  hx: 0.3,
+  hy: -0.27,
+  hz: -0.56,
+};
+
+// what the last swipe did, so a harness can read the reaping itself rather than
+// infer it from pixels: the points the hand drew, the plants the blade took, and
+// the band it used
+export const sickle = {
+  stroke: [], // canvas-space points, in the order the hand drew them, flat x,y
+  pointerType: "", // "mouse" | "touch" | "pen": what the last swipe was drawn with
+  band: 0, // px the last swipe actually used
+  cut: [], // { tier, index, share } the last swipe took off
+  swings: 0, // swipes begun this session
+  plants: 0, // plants the sickle has taken off this session
+  spent: false, // the second is used up: the rest of the drag draws nothing
+  startedAt: 0, // when the last swipe began, on the wall clock
+  lastAt: 0, // when the last point was actually drawn: a swipe longer than
+  // SICKLE.draw seconds stops moving this number, which is what proves the
+  // stroke is a swipe rather than a stroke
+};
+
+// the item's own pose state: the swing eased from the swipe, and the nodes the
+// drawn line is painted into
+export const sickleRig = { group: null, mesh: null, swing: 0 };
+
+// A grip and a crescent blade, authored as flat ribbons in the sickle's own
+// plane (x across, y up, the flat facing the viewer). The blade is an arc swept
+// from forward to up-left, tapering from a thick heel to a point, which is what
+// a crescent reads as from any angle; the grip is a short bent strip of the same
+// sweep hung off the heel.
+function sickleGeometry() {
+  const pos = [];
+  const nor = [];
+  const col = [];
+  const idx = [];
+  const steel = new THREE.Color( "#c9cfc7" );
+  const wood = new THREE.Color( "#6a4a2c" );
+
+  // one ribbon along a polyline: each ring puts two verts either side of the
+  // path, perpendicular to the run of the edge, so the strip keeps its width
+  // round a curve
+  const sweep = ( path, halfWidth, color ) => {
+    const base = pos.length / 3;
+    for ( let i = 0; i < path.length; i++ ) {
+      const prev = path[ i > 0 ? i - 1 : i ];
+      const next = path[ i < path.length - 1 ? i + 1 : i ];
+      let dx = next[ 0 ] - prev[ 0 ];
+      let dy = next[ 1 ] - prev[ 1 ];
+      const len = Math.hypot( dx, dy ) || 1;
+      dx /= len;
+      dy /= len;
+      const nx = -dy; // the in-plane perpendicular: the ribbon's width axis
+      const ny = dx;
+      const t = path.length > 1 ? i / ( path.length - 1 ) : 0;
+      const w = halfWidth( t );
+      const c = color( t );
+      const p = path[ i ];
+      pos.push( p[ 0 ] + nx * w, p[ 1 ] + ny * w, 0 );
+      pos.push( p[ 0 ] - nx * w, p[ 1 ] - ny * w, 0 );
+      nor.push( 0, 0, 1, 0, 0, 1 );
+      col.push( c.r, c.g, c.b, c.r, c.g, c.b );
+    }
+    for ( let i = 0; i < path.length - 1; i++ ) {
+      const a = base + i * 2;
+      idx.push( a, a + 2, a + 3, a, a + 3, a + 1 );
+    }
+  };
+
+  // the blade: thirteen rings round an arc of about 105 deg, heel to point
+  const blade = [];
+  const R = 0.14;
+  for ( let i = 0; i < 13; i++ ) {
+    const a = -0.2 + ( 1.66 - -0.2 ) * i / 12;
+    blade.push( [ R * Math.cos( a ), 0.01 + R * Math.sin( a ) ] );
+  }
+  sweep(
+    blade,
+    ( t ) => 0.0115 * ( 1 - t ) * ( 1 - t ) + 0.0016,
+    ( t ) => steel
+  );
+
+  // the grip: a short bent strip hung below the heel, thick enough to read as a
+  // hand rather than as another sliver of leaf
+  sweep(
+    [
+      [ 0.004, 0.006 ],
+      [ -0.006, -0.05 ],
+      [ -0.016, -0.1 ],
+      [ -0.024, -0.16 ],
+    ],
+    ( t ) => 0.0115 - 0.0022 * t,
+    ( t ) => wood
+  );
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute( "position", new THREE.Float32BufferAttribute( pos, 3 ) );
+  geo.setAttribute( "normal", new THREE.Float32BufferAttribute( nor, 3 ) );
+  geo.setAttribute( "color", new THREE.Float32BufferAttribute( col, 3 ) );
+  geo.setIndex( idx );
+  return geo;
+}
+
+// The item is built once and hidden: while the sickle is sheathed there is
+// nothing to shade, so the field keeps the twelve draw calls it always had and
+// a toggle costs no allocation.
+function buildSickle() {
+  const geo = sickleGeometry();
+  const mat = new THREE.MeshLambertMaterial( {
+    color: "#ffffff",
+    vertexColors: true,
+    side: THREE.DoubleSide,
+    // the item is arm's length from the eye, so the field's haze has nothing
+    // to say about it - the fog would only wash the steel
+    fog: false,
+  } );
+  const mesh = new THREE.Mesh( geo, mat );
+  mesh.visible = false;
+  mesh.position.set( SICKLE.hx, SICKLE.hy, SICKLE.hz );
+  const group = new THREE.Group();
+  // the camera's own rotation order, so copying its three angles over each
+  // frame lands the item exactly where the frame says it should be
+  group.rotation.order = "YXZ";
+  group.add( mesh );
+  scene.add( group );
+  sickleRig.group = group;
+  sickleRig.mesh = mesh;
+}
+
+// The blade drawn from the last point on the stroke to this one: every standing
+// plant whose stem projects within the band of that segment is cut at the
+// stubble. The stroke is capped at SICKLE.draw seconds, so a hand that keeps
+// dragging after the second is up draws nothing - the swipe is spent.
+export function beginStroke( x, y, type ) {
+  sickle.stroke.length = 0;
+  sickle.cut.length = 0;
+  sickle.stroke.push( x, y );
+  sickle.pointerType = type;
+  sickle.startedAt = performance.now();
+  sickle.lastAt = sickle.startedAt;
+  sickle.spent = false;
+  // a fingertip is sloppier than a cursor, and hover.radius already encodes how
+  // much sloppier: widening the band by the same amount keeps the blade honest
+  sickle.band = SICKLE.band + Math.max( 0, hover.radius - 13 );
+  sickle.swings = sickle.swings + 1;
+}
+
+export function reapStroke( x, y ) {
+  if ( sickle.spent ) return;
+  const now = performance.now();
+  if ( now - sickle.startedAt > SICKLE.draw * 1000 ) {
+    sickle.spent = true;
+    return;
+  }
+  const n = sickle.stroke.length;
+  if ( n < 2 ) return;
+  reapSickle( sickle.stroke[ n - 2 ], sickle.stroke[ n - 1 ], x, y );
+  sickle.stroke.push( x, y );
+  // the point landed on the glass at this instant, so a harness can tell a
+  // swipe that ran out of second from one that never stopped drawing
+  sickle.lastAt = now;
+}
+
+export function endStroke() {
+  const took = sickle.cut.length;
+  if ( took > 0 ) {
+    // one cue per swipe, not one per plant: a swish that clears a whole
+    // swathe answers with the great cut, a nick answers with the ordinary one
+    playSound( took >= SICKLE.swish ? SOUND.great : SOUND.normal, "sickle" );
+  }
+  sickle.stroke.length = 0;
+  sickle.spent = false;
+}
+
+const reapMatrix = new THREE.Matrix4();
+
+function reapSickle( x0, y0, x1, y1 ) {
+  const el = document.getElementById( "scene-canvas" );
+  if ( !el ) return;
+  const r = el.getBoundingClientRect();
+  if ( r.width <= 0 || r.height <= 0 ) return;
+  reapSickleOn( x0, y0, x1, y1, r.width, r.height );
+}
+
+function reapSickleOn( x0, y0, x1, y1, w, h ) {
+  const band = sickle.band;
+  reapMatrix.copy( camera.projectionMatrix ).multiply( camera.matrixWorldInverse );
+  const e = reapMatrix.elements;
+  const dx = x1 - x0;
+  const dy = y1 - y0;
+  const dl2 = dx * dx + dy * dy;
+  const band2 = band * band;
+  const minX = Math.min( x0, x1 ) - band;
+  const maxX = Math.max( x0, x1 ) + band;
+  const minY = Math.min( y0, y1 ) - band;
+  const maxY = Math.max( y0, y1 ) + band;
+  for ( let t = 0; t < field.tiers.length; t++ ) {
+    const mesh = field.tiers[ t ];
+    const m = mesh.instanceMatrix.array;
+    const cut = mesh.userData.cut;
+    for ( let i = 0; i < mesh.count; i++ ) {
+      if ( sickle.cut.length >= SICKLE.max ) return; // one flick cannot mow the field
+      if ( cut[ i ] ) continue; // already stubble: nothing to take
+      const o = i * 16;
+      const x = m[ o + 12 ];
+      const z = m[ o + 14 ];
+      const rw = e[ 3 ] * x + e[ 11 ] * z + e[ 15 ];
+      if ( rw <= 0 ) continue; // root behind the camera
+      const rx = ( ( e[ 0 ] * x + e[ 8 ] * z + e[ 12 ] ) / rw * 0.5 + 0.5 ) * w;
+      if ( rx < minX - 1 ) continue; // the stem is a vertical screen line: the
+      if ( rx > maxX + 1 ) continue; // column alone rules most of the field out
+      const hy = Math.hypot( m[ o + 1 ], m[ o + 5 ], m[ o + 9 ] );
+      const tw = e[ 3 ] * x + e[ 7 ] * hy + e[ 11 ] * z + e[ 15 ];
+      if ( tw <= 0 ) continue; // tip behind the camera
+      const ry = ( 0.5 - ( e[ 1 ] * x + e[ 9 ] * z + e[ 13 ] ) / rw * 0.5 ) * h;
+      const tx = ( ( e[ 0 ] * x + e[ 4 ] * hy + e[ 8 ] * z + e[ 12 ] ) / tw * 0.5 + 0.5 ) * w;
+      const ty = ( 0.5 - ( e[ 1 ] * x + e[ 5 ] * hy + e[ 9 ] * z + e[ 13 ] ) / tw * 0.5 ) * h;
+      if ( Math.min( ry, ty ) > maxY ) continue;
+      if ( Math.max( ry, ty ) < minY ) continue;
+      if ( Math.min( rx, tx ) > maxX ) continue;
+      if ( Math.max( rx, tx ) < minX ) continue;
+      // three rings down the stem - root, belly, tip - are enough to say the
+      // stem crossed the line: a stem is a short segment, not a curve
+      let hit = false;
+      for ( let s = 0; s < 3; s++ ) {
+        const k = 0.15 + s * 0.4;
+        const px = rx + ( tx - rx ) * k;
+        const py = ry + ( ty - ry ) * k;
+        let u = dl2 > 1e-6 ? ( ( px - x0 ) * dx + ( py - y0 ) * dy ) / dl2 : 0;
+        if ( u < 0 ) u = 0;
+        else if ( u > 1 ) u = 1;
+        const qx = x0 + dx * u - px;
+        const qy = y0 + dy * u - py;
+        if ( qx * qx + qy * qy <= band2 ) {
+          hit = true;
+          break;
+        }
+      }
+      if ( !hit ) continue;
+      // the stubble wanders a little along the swathe, so the cut reads as a
+      // scythe's arc rather than as one perfectly level line
+      const share = SICKLE.stub + Math.random() * SICKLE.vary;
+      cutPlant( t, i, share );
+      sickle.cut.push( { tier: t, index: i, share: share } );
+      sickle.plants = sickle.plants + 1;
+      harvest.cut = harvest.cut + 1;
+    }
+  }
+}
+
+// The drawn line, painted as DOM over the canvas rather than as geometry in
+// front of it: the stroke belongs to the glass, it must never eat a pointer
+// event, and its points are the same numbers the reaping ran on - so a harness
+// can read the line back out of the markup and compare it with what it asked
+// the hand to draw.
+let strokeNode = null;
+let strokeBand = null;
+let strokeLine = null;
+
+function paintStroke() {
+  const el = strokeNode || ( strokeNode = document.getElementById( "stroke" ) );
+  if ( !el ) return;
+  const pts = sickle.stroke;
+  if ( pts.length < 4 ) {
+    el.style.display = "none";
+    return;
+  }
+  el.style.display = "";
+  if ( !strokeLine ) strokeLine = document.getElementById( "stroke-line" );
+  if ( !strokeBand ) strokeBand = document.getElementById( "stroke-band" );
+  let s = "";
+  for ( let i = 0; i < pts.length; i += 2 ) {
+    if ( i ) s += " ";
+    s += pts[ i ].toFixed( 1 ) + "," + pts[ i + 1 ].toFixed( 1 );
+  }
+  if ( strokeBand ) strokeBand.setAttribute( "points", s );
+  if ( strokeLine ) strokeLine.setAttribute( "points", s );
+}
+
+// The item rides the camera rather than the viewer's seat, so it keeps its
+// place in the frame whatever the walk does to the framing. The swing is eased
+// from the swipe's own second: the arm follows the line the hand drew.
+export function stepSickle( now ) {
+  const rig = sickleRig;
+  if ( !rig.group ) return;
+  const drawn = sickle.stroke.length >= 4;
+  if ( state.sickle && drawn ) {
+    const el = ( now - sickle.startedAt ) / ( SICKLE.draw * 1000 );
+    rig.swing = Math.min( 1, Math.max( 0, el ) );
+  } else if ( rig.swing > 0 ) {
+    // the swipe is over: the arm settles back rather than snapping to rest
+    rig.swing = Math.max( 0, rig.swing - 0.09 );
+  }
+  rig.mesh.visible = state.sickle;
+  if ( !state.sickle ) return;
+  rig.group.position.copy( camera.position );
+  rig.group.rotation.x = camera.rotation.x;
+  rig.group.rotation.y = camera.rotation.y;
+  rig.group.rotation.z = camera.rotation.z;
+  const s = rig.swing;
+  const ease = s * s * ( 3 - 2 * s );
+  // rest: the blade held up and a little across the body. swing: the arm turns
+  // over and the crescent sweeps down through the frame with the drawn line
+  rig.mesh.rotation.x = -0.34 - 1.5 * ease;
+  rig.mesh.rotation.y = 0.22 - 0.72 * ease;
+  rig.mesh.rotation.z = 0.12 + 0.52 * ease;
+  rig.mesh.position.set(
+    SICKLE.hx - 0.1 * ease,
+    SICKLE.hy + 0.05 - 0.07 * ease,
+    SICKLE.hz + 0.05 * ease
+  );
+}
+
 export function buildField() {
   const qf = QUALITY[ state.quality ] !== undefined ? QUALITY[ state.quality ] : 1;
   const rnd = mulberry32( params.seed );
@@ -1409,14 +1774,15 @@ export function applyRig() {
 // ---------------------------------------------------------------------------
 // Controls. The page owns the DOM; this module owns the scene, so the panel
 // stays declarative in the markup and every control is a small state change
-// here. Only the view row (plus the elevation row a phone needs) carries
-// buttons now: the light row is gone because the hour walks itself through the
-// presets a minute at a time, and the wind slider, the camera row and the
-// playback row were removed, so Shift+Arrow nudges the wind, Space toggles
-// pause, and the arrow keys / WASD walk with nothing gating them. setWind /
-// setPaused / setWalk stay
-// exported because the autotest harness drives them straight over the DevTools
-// protocol, and setLight stays exported because the harness pins one hour.
+// here. The view row and the sickle toggle are the two rows carrying buttons
+// now (plus the elevation row a phone needs): the light row is gone because
+// the hour walks itself through the presets a minute at a time, and the wind
+// slider, the camera row and the playback row were removed, so Shift+Arrow
+// nudges the wind, Space toggles pause, k draws or sheathes the sickle, and
+// the arrow keys / WASD walk with nothing gating them. setWind / setPaused /
+// setWalk / setSickle stay exported because the autotest harness drives them
+// straight over the DevTools protocol, and setLight stays exported because the
+// harness pins one hour.
 // ---------------------------------------------------------------------------
 export function setWind( v ) {
   state.wind = Math.max( 0, Math.min( 1, v ) );
@@ -1427,14 +1793,46 @@ export function setPaused( p ) {
   state.paused = !!p;
 }
 
+// drawing or sheathing the sickle: the same flip the panel's toggle and the k
+// key take, so a thumb and a keyboard cannot disagree about which of the two
+// the pointer is holding. Sheathing drops a swipe that was mid-way through.
+//
+// the panel's own toggle is remembered here rather than only in the click
+// handler, because the keyboard flips the same mode and the panel must not
+// still read "sheathed" while the blade is out
+let sickleButton = null;
+
+export function setSickle( v ) {
+  state.sickle = v === true || v === 1 || v === "on" || v === "true" || v === "1";
+  if ( sickleButton ) sickleButton.classList.toggle( "on", state.sickle );
+  if ( state.sickle ) return;
+  sickle.stroke.length = 0;
+  sickle.cut.length = 0;
+  sickle.spent = false;
+}
+
 export function wireUI() {
-  // the view row is the only row left with buttons, so this loop has one action
-  // to serve; the hour is automatic and wind / pause / walk are keyboard-only
+  // two actions share the loop: the view row picks a framing, the sickle row
+  // flips a toggle, so the click reads the row it belongs to rather than
+  // assuming the one action the panel used to have
   for ( const node of document.querySelectorAll( "[data-action]" ) ) {
+    const action = node.getAttribute( "data-action" );
     node.addEventListener( "click", ( e ) => {
+      if ( action === "sickle" ) {
+        // setSickle paints the .on class itself, so the click and the k key
+        // leave the panel reading the same thing the mode is
+        setSickle( !state.sickle );
+        return;
+      }
       setView( node.getAttribute( "data-value" ) );
       node.classList.toggle( "on", true );
     } );
+    if ( action === "sickle" ) {
+      sickleButton = node;
+      // ?sickle=1 starts with the blade already drawn, so the panel has to
+      // agree with the mode before a single click has happened
+      sickleButton.classList.toggle( "on", state.sickle );
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -1567,6 +1965,10 @@ export function wireUI() {
     // so it also resets the clock and does not immediately re-trigger
     if ( e.key === "l" ) advanceLight();
     else if ( e.key === "v" ) setView( state.view === "open" ? "among" : "open" );
+    // k draws or sheathes the sickle: the same flip the panel's toggle takes, so
+    // a keyboard and a thumb cannot disagree about which of the two the pointer
+    // is holding
+    else if ( e.key === "k" ) setSickle( !state.sickle );
   } );
 
   window.addEventListener( "keyup", ( e ) => {
@@ -1686,6 +2088,14 @@ export function wireUI() {
       const r = canvas.getBoundingClientRect();
       if ( r.width <= 0 || r.height <= 0 ) return;
       pickPlant( e.clientX - r.left, e.clientY - r.top, r.width, r.height );
+      // With the sickle drawn the press belongs to the blade, not to the check:
+      // it puts the tip on the glass and starts a swipe, and the drag that
+      // follows draws the line rather than turning the view. A cursor and a
+      // finger take the same path here - a flick is a drag.
+      if ( state.sickle ) {
+        beginStroke( e.clientX - r.left, e.clientY - r.top, e.pointerType );
+        return;
+      }
       // A cursor arms on the press: it hovers first, so the press is a decision
       // the viewer already made. A finger cannot hover, and press-and-slide is
       // the one gesture the field uses to look around, so arming on press would
@@ -1719,6 +2129,12 @@ export function wireUI() {
       const dy = e.clientY - cam.drag.y;
       cam.drag.x = e.clientX;
       cam.drag.y = e.clientY;
+      // the sickle drawn: the drag draws a line and reaps what is under it, and
+      // the view stays put - which is the whole point of the toggle
+      if ( state.sickle ) {
+        if ( r.width > 0 && r.height > 0 ) reapStroke( e.clientX - r.left, e.clientY - r.top );
+        return;
+      }
       if ( !state.walk ) return; // "Hold still" also freezes the drag look
       // yaw is unbounded: fold it into -PI..PI rather than clamping it, so the
       // view can spin round and round without the number drifting away
@@ -1727,6 +2143,12 @@ export function wireUI() {
     } );
     canvas.addEventListener( "pointerup", ( e ) => {
       cam.drag = null;
+      // the swipe ends: the blade finishes its cut and lifts off the glass, and
+      // the cue it earned is answered for the whole swathe at once
+      if ( state.sickle ) {
+        endStroke();
+        return;
+      }
       if ( !cam.tap ) return;
       const slid = Math.hypot( e.clientX - cam.tap.x0, e.clientY - cam.tap.y0 );
       const held = performance.now() - cam.tap.t0;
@@ -1745,6 +2167,7 @@ export function wireUI() {
     canvas.addEventListener( "pointerleave", ( e ) => {
       cam.drag = null;
       cam.tap = null; // a finger that left the field mid-touch is not a tap
+      if ( state.sickle ) endStroke(); // a hand that left the glass spent the swipe
       setHover( -1, -1, 0 ); // the pointer left the field: nothing is outlined
     } );
     // the panel sits on top of the canvas, so a pointer that lands on it never
@@ -1805,6 +2228,10 @@ export function frame( now ) {
   applyRig();
   stepCamera( dt );
   applyCamera();
+  // the held item rides the camera, so it follows the framing whether the
+  // environment is paused or running - the arm belongs to the viewer, not to the
+  // field's own clock
+  stepSickle( now );
   // the wave train is a per-plant CPU pass, so it only runs when the
   // environment is actually moving
   if ( !state.paused )
@@ -1819,6 +2246,9 @@ export function frame( now ) {
   // of it when the field is paused
   if ( !state.paused ) stepFx( dt );
   stepSkill( now );
+  // the drawn line is DOM rather than geometry, so it is painted on the same
+  // pass as the meter rather than in the scene graph
+  paintStroke();
   renderer.render( scene, camera );
 
   perf.frames++;
@@ -1837,6 +2267,9 @@ export function frame( now ) {
         // field is under - otherwise an automatic change reads as a glitch
         " · light " + state.light +
         ( state.paused ? " · paused" : "" ) +
+        // the sickle is a mode rather than a number, so the readout only names
+        // it while it is drawn - a sheathed field reads exactly as before
+        ( state.sickle ? " · sickle" : "" ) +
         " · cut " + harvest.cut +
         " · buffer " + perf.buffer;
     }
@@ -1882,6 +2315,17 @@ export function start() {
       SOUND,
       playSound,
       ambience,
+      // the sickle: the mode, the swipe's own record, and the item's pose, so a
+      // harness can read what a drawn line reaped rather than infer it from
+      // pixels
+      sickle,
+      SICKLE,
+      sickleRig,
+      setSickle,
+      beginStroke,
+      reapStroke,
+      endStroke,
+      paintStroke,
       // the url knobs, so a harness can read the hour length it is actually
       // running under rather than assume it
       params,
