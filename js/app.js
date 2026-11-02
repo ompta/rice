@@ -33,7 +33,7 @@ import {
 export const state = {
   wind: 0.34, // 0..1, straight from the slider
   paused: false,
-  light: "afternoon",
+  light: "morning", // the hour; it walks itself through PRESETS unless ?light= pins one
   view: "open",
   quality: "high",
   walk: true, // free camera walking: arrow keys / WASD move, a held drag looks
@@ -52,7 +52,14 @@ export const params = (() => {
   };
   return {
     wind: num( "wind", 0.34 ),
-    light: pick( "light", "afternoon" ),
+    // an hour named in the url pins it and the field stays under that one light;
+    // with no light= the hour walks itself through the presets (cycleLight),
+    // holding each one for ?cycle= seconds - one minute by default, which is
+    // what a viewer sits under. The harnesses name a short cycle or pin one hour,
+    // since a comparable pair of frames has to be lit by one known hour
+    light: pick( "light", "morning" ),
+    lightPinned: q.get( "light" ) !== null && q.get( "light" ) !== "",
+    cycle: num( "cycle", 60 ), // seconds per hour; 60 = one minute, 0 = hold the opening hour
     view: pick( "view", "open" ),
     paused: num( "paused", 0 ) > 0,
     quality: pick( "quality", "high" ),
@@ -932,6 +939,37 @@ export function setLight( name ) {
   state.light = name;
 }
 
+// The hour walks itself. Nothing on the page picks it any more, so the field
+// steps through the presets in markup order - morning, afternoon, golden hour,
+// back to morning - every ?cycle= seconds (60 by default = one minute) and each
+// step eases over the same second a manual change would, which is what makes it
+// read as an hour passing rather than a cut. Two things keep it out of the way:
+// a paused field never advances its light (the clock only runs in the live
+// branch of the loop), and an hour named in the url pins the scene to that one
+// light - every screenshot harness names one, and a moving hour would make its
+// frame pairs incomparable.
+export const LIGHT_ORDER = Object.keys( PRESETS );
+export let lightStage = Math.max( 0, LIGHT_ORDER.indexOf( params.light ) );
+export let lightClock = 0;
+
+export function advanceLight() {
+  lightStage = ( lightStage + 1 ) % LIGHT_ORDER.length;
+  lightClock = 0;
+  setLight( LIGHT_ORDER[ lightStage ] );
+}
+
+export function cycleLight( wallDt ) {
+  if ( params.lightPinned || params.cycle <= 0 ) return;
+  // the hour rides the wall clock rather than the capped simulation step, so a
+  // minute stays a real minute on screen whatever the frame rate is: the 0.06s
+  // clamp the rest of the scene takes would stretch it to about 90s at 11fps,
+  // which is exactly where a software-GL harness would disagree with a viewer
+  lightClock += wallDt;
+  // a floor of 2s keeps a tiny ?cycle= from strobing the sky every frame
+  if ( lightClock < Math.max( 2, params.cycle ) ) return;
+  advanceLight();
+}
+
 function easeRig( dt ) {
   if ( rigBlend < 1 ) {
     rigBlend = Math.min( 1, rigBlend + dt * 1.15 );
@@ -986,11 +1024,14 @@ export function applyRig() {
 // ---------------------------------------------------------------------------
 // Controls. The page owns the DOM; this module owns the scene, so the panel
 // stays declarative in the markup and every control is a small state change
-// here. Only the light, view and (on a phone) elevation rows are buttons now:
-// the wind slider, the camera row and the playback row were removed, so
-// Shift+Arrow nudges the wind, Space toggles pause, and the arrow keys / WASD
-// walk with nothing gating them. setWind / setPaused / setWalk stay exported
-// because the autotest harness drives them straight over the DevTools protocol.
+// here. Only the view row (plus the elevation row a phone needs) carries
+// buttons now: the light row is gone because the hour walks itself through the
+// presets a minute at a time, and the wind slider, the camera row and the
+// playback row were removed, so Shift+Arrow nudges the wind, Space toggles
+// pause, and the arrow keys / WASD walk with nothing gating them. setWind /
+// setPaused / setWalk stay
+// exported because the autotest harness drives them straight over the DevTools
+// protocol, and setLight stays exported because the harness pins one hour.
 // ---------------------------------------------------------------------------
 export function setWind( v ) {
   state.wind = Math.max( 0, Math.min( 1, v ) );
@@ -1002,14 +1043,11 @@ export function setPaused( p ) {
 }
 
 export function wireUI() {
+  // the view row is the only row left with buttons, so this loop has one action
+  // to serve; the hour is automatic and wind / pause / walk are keyboard-only
   for ( const node of document.querySelectorAll( "[data-action]" ) ) {
     node.addEventListener( "click", ( e ) => {
-      const action = node.getAttribute( "data-action" );
-      const value = node.getAttribute( "data-value" );
-      // only light and view still carry data-action; pause and walk lost their
-      // buttons, so nothing here can reach setPaused or setWalk from a click
-      if ( action === "light" ) setLight( value );
-      else if ( action === "view" ) setView( value );
+      setView( node.getAttribute( "data-value" ) );
       node.classList.toggle( "on", true );
     } );
   }
@@ -1140,11 +1178,10 @@ export function wireUI() {
       cam.keys[ e.code ] = true;
       return;
     }
-    if ( e.key === "l" ) {
-      const names = Object.keys( PRESETS );
-      const i = names.indexOf( state.light );
-      setLight( names[ ( i + 1 ) % names.length ] );
-    } else if ( e.key === "v" ) setView( state.view === "open" ? "among" : "open" );
+    // l steps to the next hour by hand - the same step the automatic cycle takes,
+    // so it also resets the clock and does not immediately re-trigger
+    if ( e.key === "l" ) advanceLight();
+    else if ( e.key === "v" ) setView( state.view === "open" ? "among" : "open" );
   } );
 
   window.addEventListener( "keyup", ( e ) => {
@@ -1360,12 +1397,20 @@ export function resize() {
 }
 
 export function frame( now ) {
-  const dt = Math.min( 0.06, Math.max( 0, ( now - perf.last ) / 1000 ) );
+  // raw is the true wall-clock gap and dt the capped simulation step: the stalks
+  // take the cap so a stalled tab cannot teleport the wave train, the hour takes
+  // raw so "one minute" stays a minute on screen at any frame rate
+  const raw = Math.min( 0.5, Math.max( 0, ( now - perf.last ) / 1000 ) );
+  const dt = Math.min( 0.06, raw );
   perf.last = now;
   if ( cam.t < 1 ) cam.t = Math.min( 1, cam.t + dt * 0.85 );
   if ( !state.paused ) {
     perf.simTime += dt;
     uniforms.uTime.value = perf.simTime;
+    // the hour only advances in the live branch, so a paused field keeps its
+    // light frozen along with the stalks; it takes the wall gap rather than the
+    // capped step so a minute stays a minute
+    cycleLight( raw );
   }
   easeRig( dt );
   applyRig();
@@ -1396,6 +1441,9 @@ export function frame( now ) {
         " · plants " + field.instances.toLocaleString( "en-US" ) +
         " · draws " + renderer.info.render.calls +
         " · wind " + ( 100 * state.wind ).toFixed( 0 ) + "%" +
+        // the hour is no longer a control, so the readout names the one the
+        // field is under - otherwise an automatic change reads as a glitch
+        " · light " + state.light +
         ( state.paused ? " · paused" : "" ) +
         " · cut " + harvest.cut +
         " · buffer " + perf.buffer;
@@ -1429,6 +1477,9 @@ export function start() {
       gradeAt,
       SKILL,
       TOUCH,
+      // the url knobs, so a harness can read the hour length it is actually
+      // running under rather than assume it
+      params,
     };
   }
   perf.lastStats = performance.now();

@@ -37,13 +37,6 @@
     <canvas id="scene-canvas"></canvas>
 
     <section id="panel" class="panel" aria-label="Field controls">
-      <div class="row lights">
-        <span class="label">Light</span>
-        <button data-action="light" data-value="morning">Morning</button>
-        <button data-action="light" data-value="afternoon">Afternoon</button>
-        <button data-action="light" data-value="golden">Golden hour</button>
-      </div>
-
       <div class="row views">
         <span class="label">View</span>
         <button data-action="view" data-value="open">Open field</button>
@@ -55,13 +48,14 @@
         <button class="hold" data-hold="1">Rise</button>
         <button class="hold" data-hold="-1">Lower</button>
       </div>
-
     </section>
 
     <!--
-      Wind, pause and the walk have no buttons here any more, so they are
-      keyboard-only: Shift+Arrow nudges the wind, Space toggles pause, and the
-      arrow keys / WASD walk. The rig row stays because a phone has no E / Q.
+      The hour has no buttons here any more: it walks itself through morning,
+      afternoon and golden hour on the frame clock (one minute each by default, ?light=
+      pins one). Wind, pause and the walk are keyboard-only - Shift+Arrow nudges
+      the wind, Space toggles pause, the arrow keys / WASD walk. The rig row stays
+      because a phone has no E / Q.
     -->
 
     <div id="pad" class="pad" aria-label="Walk pad">

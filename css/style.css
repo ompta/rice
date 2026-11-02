@@ -42,17 +42,19 @@ body {
 }
 
 /* -------------------------------------------------------------- panel -- */
-/* the wordmark and tagline were removed, so the canvas carries the whole
-   first impression and nothing floats over the sky */
+/* the wordmark, the light row and the old camera / wind / playback rows are all
+   gone, so the canvas carries the whole first impression and the bar is a single
+   row deep on a desktop (the rig row only arrives with .touch) - which is what
+   let every inset, gap and button here shrink */
 .panel {
   position: fixed;
-  left: 14px;
-  bottom: 14px;
+  left: 10px;
+  bottom: 10px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 8px 10px;
-  border-radius: 8px;
+  gap: 4px;
+  padding: 5px 8px;
+  border-radius: 6px;
   background: var(--panel);
   border: 1px solid var(--panel-line);
   backdrop-filter: blur(6px) saturate(120%);
@@ -62,26 +64,26 @@ body {
 .row {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
 }
 
 .label {
-  font-size: 9px;
+  font-size: 8px;
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--ink-dim);
-  margin-right: 3px;
+  margin-right: 2px;
 }
 
 button {
-  font-size: 10px;
+  font-size: 9px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--ink-dim);
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid var(--panel-line);
-  border-radius: 4px;
-  padding: 4px 8px;
+  border-radius: 3px;
+  padding: 3px 7px;
   cursor: pointer;
 }
 
@@ -96,9 +98,10 @@ button.on {
   border-color: rgba(159, 192, 106, 0.5);
 }
 
-/* the wind slider (.track / .handle) and the readout spans (.readout) no
-   longer exist: wind is Shift+Arrow, pause is Space, and the walk needs no
-   gate because nothing but the keys can move the camera now */
+/* the wind slider (.track / .handle), the readout spans (.readout), the camera
+   and playback rows and the light row no longer exist: wind is Shift+Arrow,
+   pause is Space, the keys move the camera, and the hour walks itself, so the
+   stylesheet has nothing left to dress for any of them */
 
 /* --------------------------------------------------------------- stats -- */
 .stats {
@@ -130,11 +133,11 @@ button.on {
 /* ------------------------------------------------------- narrow screens -- */
 @media (max-width: 760px) {
   .panel {
-    left: 10px;
-    right: 10px;
-    bottom: 10px;
-    gap: 5px;
-    padding: 7px 9px;
+    left: 8px;
+    right: 8px;
+    bottom: 8px;
+    gap: 4px;
+    padding: 5px 8px;
   }
 
   .row {
@@ -213,27 +216,28 @@ html.touch .rig {
 
 html.touch button {
   /* a fingertip is about 9mm across, so a control under 40px of tap target is
-     a coin flip; the bar is smaller than it used to be but this stays the one
-     size a thumb can hit reliably, and touch-action: manipulation also drops
-     the double-tap zoom delay that would swallow a skill check's second tap */
-  min-height: 34px;
-  padding: 6px 10px;
+     a coin flip; with the light row gone the bar has room to spare, so the
+     targets drop to the smallest size a thumb still hits reliably rather than
+     the size it used to need, and touch-action: manipulation also drops the
+     double-tap zoom delay that would swallow a skill check's second tap */
+  min-height: 32px;
+  padding: 5px 9px;
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
 }
 
 html.touch .panel {
   /* the bar spans the whole bottom edge rather than hugging the left: at a
-     phone width a narrow panel would wrap the light and view rows into a stack,
-     which eats the framing. Full width keeps each row on one line, and with the
-     camera, wind and playback rows gone the bar is two rows deep on a portrait
-     phone - three once .rig arrives - so the thumb pad has more glass under it
-     than it did before */
-  left: 10px;
-  right: 10px;
-  bottom: 10px;
-  gap: 5px;
-  padding: 7px 10px;
+     phone width a narrow panel would wrap the rows into a stack, which eats the
+     framing. Full width keeps each row on one line, and with the light, camera,
+     wind and playback rows gone the bar is only the view row plus the rig row -
+     two rows deep on a portrait phone, one on a landscape phone where .rig is
+     hidden - so the thumb pad keeps its glass */
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  gap: 4px;
+  padding: 6px 9px;
 }
 
 html.touch .stats {
@@ -246,9 +250,10 @@ html.touch .stats {
 @media (pointer: coarse, orientation: landscape) {
   html.touch button {
     /* a landscape phone is barely taller than the bar, so the tap targets
-       shrink to the smallest size a thumb still hits reliably. The bar is two
-       rows shorter than it used to be, which is what bought the room here */
-    min-height: 30px;
+       shrink to the smallest size a thumb still hits reliably. With the light
+       row gone the bar is a single row here (.rig is hidden below), which is
+       what bought the room */
+    min-height: 28px;
   }
 
   html.touch .rig {
