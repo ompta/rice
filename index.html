@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>VERDANT — A sea of green</title>
+    <meta
+      name="description"
+      content="A living rice field in the browser: procedural plants, wind on the GPU, one draw call per level of detail, and a camera you walk with the arrow keys, WASD and the pointer."
+    />
+    <link rel="stylesheet" href="css/style.css" />
+    <link rel="icon" href="data:," />
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "./node_modules/three/build/three.module.js",
+          "three/": "./node_modules/three/build/"
+        }
+      }
+    </script>
+    <script type="module" src="js/app.js"></script>
+  </head>
+  <body>
+    <canvas id="scene-canvas"></canvas>
+
+    <header class="title">
+      <h1 class="wordmark">VERDANT</h1>
+      <p class="tagline">A sea of green</p>
+    </header>
+
+    <section id="panel" class="panel" aria-label="Field controls">
+      <div class="row lights">
+        <span class="label">Light</span>
+        <button data-action="light" data-value="morning">Morning</button>
+        <button data-action="light" data-value="afternoon">Afternoon</button>
+        <button data-action="light" data-value="golden">Golden hour</button>
+      </div>
+
+      <div class="row views">
+        <span class="label">View</span>
+        <button data-action="view" data-value="open">Open field</button>
+        <button data-action="view" data-value="among">Among the rice</button>
+      </div>
+
+      <div class="row camera">
+        <span class="label">Camera</span>
+        <button data-action="walk" data-value="on">Walk</button>
+        <button data-action="walk" data-value="off">Hold still</button>
+        <button data-action="walk" data-value="reset">Reset framing</button>
+        <span id="move-readout" class="readout">arrow keys / WASD walk · hold + drag to look</span>
+      </div>
+
+      <div class="row wind">
+        <span class="label">Wind</span>
+        <div id="wind-track" class="track">
+          <div id="wind-handle" class="handle"></div>
+        </div>
+        <span id="wind-readout" class="readout">gentle breeze</span>
+      </div>
+
+      <div class="row playback">
+        <span class="label">Playback</span>
+        <button data-action="pause" data-value="true">Pause</button>
+        <button data-action="pause" data-value="false">Resume</button>
+      </div>
+    </section>
+
+    <div id="skill" class="skill" aria-label="Skill check" hidden>
+      <div class="band" id="skill-normal"></div>
+      <div class="band good" id="skill-good"></div>
+      <div class="band great" id="skill-great"></div>
+      <div class="needle" id="skill-needle"></div>
+      <div class="verdict" id="skill-verdict"></div>
+    </div>
+
+    <div id="stats" class="stats"></div>
+    <div id="err" class="err"></div>
+  </body>
+</html>

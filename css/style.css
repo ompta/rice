@@ -1,0 +1,287 @@
+/* css/style.css — the overlay. The scene owns every pixel of the canvas;
+   this file only dresses the controls, and keeps them out of the way of the
+   view on narrow screens. */
+
+:root {
+  --ink: #e8f0e4;
+  --ink-dim: #9fb3a2;
+  --panel: rgba(11, 22, 16, 0.82);
+  --panel-line: rgba(150, 186, 152, 0.22);
+  --accent: #9fc06a;
+  --moss: #4f6b3a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100vh;
+  background: #0b120e;
+  overflow: hidden;
+  color: var(--ink);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+#scene-canvas {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  display: block;
+}
+
+/* ---------------------------------------------------------------- title -- */
+.title {
+  position: fixed;
+  top: 22px;
+  left: 26px;
+  pointer-events: none;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.55);
+}
+
+.wordmark {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.42em;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+
+.tagline {
+  margin: 6px 0 0;
+  font-family: Georgia, "Times New Roman", serif;
+  font-style: italic;
+  font-size: 15px;
+  letter-spacing: 0.04em;
+  color: var(--ink-dim);
+}
+
+/* --------------------------------------------------------------- panel -- */
+.panel {
+  position: fixed;
+  left: 22px;
+  bottom: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: var(--panel);
+  border: 1px solid var(--panel-line);
+  backdrop-filter: blur(6px) saturate(120%);
+  -webkit-backdrop-filter: blur(6px) saturate(120%);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.label {
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  margin-right: 4px;
+}
+
+button {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--panel-line);
+  border-radius: 5px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+button:hover {
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.09);
+}
+
+button.on {
+  color: #eef6df;
+  background: rgba(159, 192, 106, 0.18);
+  border-color: rgba(159, 192, 106, 0.5);
+}
+
+/* ----------------------------------------------------------------- wind -- */
+.track {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 120px;
+  height: 8px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, rgba(159, 192, 106, 0.16), rgba(159, 192, 106, 0.5));
+  border: 1px solid var(--panel-line);
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.handle {
+  position: absolute;
+  top: -5px;
+  left: 34%;
+  width: 14px;
+  height: 18px;
+  border-radius: 4px;
+  background: #dce8cf;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+
+.readout {
+  font-family: Georgia, serif;
+  font-style: italic;
+  font-size: 12px;
+  color: var(--ink-dim);
+  margin-left: 10px;
+  white-space: nowrap;
+}
+
+/* --------------------------------------------------------------- stats -- */
+.stats {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--ink-dim);
+  pointer-events: none;
+}
+
+.err {
+  position: fixed;
+  right: 20px;
+  top: 20px;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  color: #ffb3a8;
+  background: rgba(30, 8, 6, 0.72);
+  border: 1px solid rgba(255, 150, 130, 0.35);
+  border-radius: 6px;
+  padding: 8px 10px;
+  max-width: 60vw;
+  white-space: pre-wrap;
+}
+
+/* ------------------------------------------------------- narrow screens -- */
+@media (max-width: 760px) {
+  .title {
+    top: 14px;
+    left: 16px;
+  }
+
+  .wordmark {
+    font-size: 12px;
+    letter-spacing: 0.3em;
+  }
+
+  .tagline {
+    font-size: 13px;
+  }
+
+  .panel {
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
+    gap: 8px;
+  }
+
+  .row {
+    flex-wrap: wrap;
+  }
+
+  .track {
+    min-width: 90px;
+  }
+
+  .stats {
+    right: 14px;
+    bottom: 0;
+  }
+}
+
+/* ------------------------------------------------------- skill check ----- */
+/* The meter floats over the canvas where the plant was clicked. It is DOM
+   rather than geometry, and it has to stay click-through: the second click
+   that plays the check must reach the canvas listener, not land on the meter,
+   which is what pointer-events: none buys here. */
+.skill {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 190px;
+  height: 10px;
+  border-radius: 5px;
+  background: rgba(11, 22, 16, 0.72);
+  border: 1px solid var(--panel-line);
+  pointer-events: none;
+  z-index: 5;
+}
+
+/* three nested bands, widest first, so the great band reads as the bright
+   core of the target rather than as a separate gauge */
+.skill .band {
+  position: absolute;
+  top: 0;
+  height: 10px;
+  border-radius: 3px;
+  background: rgba(159, 192, 106, 0.22);
+}
+
+.skill .band.good {
+  background: rgba(159, 192, 106, 0.5);
+}
+
+.skill .band.great {
+  background: #eef6dc;
+}
+
+.skill .needle {
+  position: absolute;
+  top: -4px;
+  width: 3px;
+  height: 18px;
+  border-radius: 1px;
+  background: #f4f8ea;
+  box-shadow: 0 0 3px rgba(0, 0, 0, 0.65);
+}
+
+.skill .verdict {
+  position: absolute;
+  left: 0;
+  bottom: 18px;
+  font-family: Georgia, serif;
+  font-style: italic;
+  font-size: 13px;
+  white-space: nowrap;
+  color: var(--ink-dim);
+}
+
+.skill .verdict.normal {
+  color: var(--ink);
+}
+
+.skill .verdict.good {
+  color: var(--accent);
+}
+
+.skill .verdict.great {
+  color: #f4f8ea;
+}
+
+.skill .verdict.fail {
+  color: #ffb3a8;
+}
+

@@ -1,0 +1,15 @@
+{
+  "name": "verdant-rice-field",
+  "version": "1.0.0",
+  "description": "VERDANT - A sea of green. An immersive 3D rice field in the browser (Three.js, instancing + GPU wind).",
+  "dependencies": {
+    "puppeteer-core": "^25.16.0",
+    "three": "^0.170.0"
+  },
+  "scripts": {
+    "serve": "node _serve.mjs",
+    "shot": "node _shot.mjs",
+    "check": "node _check.mjs",
+    "interact": "node _interact.mjs"
+  }
+}
