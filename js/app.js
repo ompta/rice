@@ -10,6 +10,10 @@
 //   hover         pointing at the field outlines one plant in bright leaf edges
 //   skill check   clicking a plant arms a meter, a second click plays it and a
 //                 pass cuts the plant
+//   cut fragments a pass also slices the plant: five slivers of leaf tear off
+//                 at the cut plane and fall, all of them one InstancedMesh
+//   sound         golden hour loops the evening cicada and the skill check
+//                 answers itself: a great cut, an ordinary cut, a miss
 //
 // Nothing is loaded: every geometry and material here is procedural, so the
 // page's only dependency is three.js itself, which index.html's import map
@@ -60,10 +64,17 @@ export const params = (() => {
     light: pick( "light", "morning" ),
     lightPinned: q.get( "light" ) !== null && q.get( "light" ) !== "",
     cycle: num( "cycle", 60 ), // seconds per hour; 60 = one minute, 0 = hold the opening hour
+    // fragments a cut throws off. Five is what a slice reads as: the severed
+    // top plus four leaf shavings scattering around it. A harness names it to
+    // prove the burst size it asked for is the burst size the page runs under
+    perts: Math.max( 0, Math.round( num( "perts", 5 ) ) ),
     view: pick( "view", "open" ),
     paused: num( "paused", 0 ) > 0,
     quality: pick( "quality", "high" ),
     dpr: num( "dpr", 0 ), // 0 = use the device ratio, capped
+    // the field's volume: 0 mutes it, so a harness can prove which cue the page
+    // chose for an outcome without a browser spending its audio on one
+    sound: num( "sound", 1 ),
     seed: num( "seed", 20260 ),
     autotest: num( "autotest", 0 ) > 0,
     walk: num( "walk", 1 ) > 0, // 0 = keep the camera locked to the preset framings
@@ -293,6 +304,11 @@ export function build() {
   farField.position.y = 0.02;
   farField.renderOrder = 4;
   scene.add( farField );
+
+  // --- cut fragments --------------------------------------------------------
+  // One InstancedMesh for every fragment the whole session will throw, so a cut
+  // costs no draw call and no allocation. See spawnCutFx / stepFx below.
+  buildFx();
 
   return { renderer, scene, camera };
 }
@@ -543,6 +559,10 @@ export function resolveSkill() {
   if ( grade !== "fail" ) {
     cutPlant( skill.tier, skill.index, SKILL.stub[ grade ] );
     harvest.cut = harvest.cut + 1;
+    // the great band gets its own cue, good and normal share the ordinary cut
+    playSound( grade === "great" ? SOUND.great : SOUND.normal, grade );
+  } else {
+    playSound( SOUND.hurt, grade );
   }
 }
 
@@ -550,6 +570,12 @@ export function cutPlant( tier, index, share ) {
   const mesh = field.tiers[ tier ];
   const m = mesh.instanceMatrix.array;
   const o = index * 16;
+  // the plant's real height is the length of its up column and the cut plane is
+  // share of that up from the root; both are read before the shrink below, which
+  // is what the fragment burst is aimed at
+  const hy = Math.hypot( m[ o + 1 ], m[ o + 5 ], m[ o + 9 ] );
+  const px = m[ o + 12 ];
+  const pz = m[ o + 14 ];
   // the instance origin is the plant's root, so scaling the three basis
   // columns shrinks the whole plant toward the ground and leaves a stubble
   for ( let c = 0; c < 3; c++ ) {
@@ -565,6 +591,116 @@ export function cutPlant( tier, index, share ) {
     hi.array[ index ] = 0;
     hi.needsUpdate = true;
   }
+  // the slice: the severed part does not vanish, it goes into the air, wearing
+  // the colour of the plant it came off
+  const tint = mesh.geometry.getAttribute( "aTint" );
+  const t = index * 3;
+  spawnCutFx( px, hy * share, pz, hy * ( 1 - share ), tint.array[ t ], tint.array[ t + 1 ], tint.array[ t + 2 ] );
+}
+
+// ---------------------------------------------------------------------------
+// The cut, made visible: five fragments per pass.
+//
+// A pass does more than shrink a plant - it slices it, and the severed part has
+// to go somewhere. It goes into the air: CUT_FX.perts slivers of leaf tear off
+// along the cut, tumble over downwind (the same world direction the wind shader
+// bends the rice along) and settle on the paddy floor.
+//
+// All of them share ONE InstancedMesh, so a cut costs no draw call and no
+// allocation: the slots live in a ring buffer, and a dead slot is parked at
+// zero scale, which collapses its four verts onto one point and rasterises
+// nothing. The pool is sized for a burst a second across the whole life of a
+// fragment - a few dozen slots - so the field never gets near it.
+//
+// Nothing is blended here either: the fragments are opaque bits of leaf, so they
+// take the depth test exactly like the rice does and the scene's "any order
+// paints the same pixels" rule still holds. A fragment fades by shrinking
+// rather than by alpha, which is what keeps it out of a transparent queue.
+//
+// The colour comes from the plant that was cut - the aTint the field already
+// stores per instance - mixed toward the pale straw of a freshly torn end, so a
+// fragment belongs to its own plant rather than to a generic particle sprite.
+// ---------------------------------------------------------------------------
+export const CUT_FX = {
+  perts: params.perts, // fragments a cut throws off; ?perts= overrides
+  pool: 96,            // slots the one draw call carries
+  life: 1.5,           // seconds a fragment stays on screen
+  fall: 4.2,           // m/s of gravity: a leaf is light, so it floats down
+  drift: 0.9,          // m/s of wind push on a fragment, scaled by uWind
+  floor: 0.006,        // how far above the paddy floor a resting fragment sits
+};
+
+// the world-space downwind direction the wind shader bends the rice along, and
+// the horizontal direction at right angles to it
+const DOWNWIND_X = 0.974732, DOWNWIND_Z = 0.25343;
+
+export const cutFx = {
+  mesh: null,
+  pool: 0,
+  cursor: 0, // next slot the ring buffer hands out
+  live: 0, // fragments on screen right now
+  alive: null, // 0 / 1 per slot
+  age: null,
+  life: null,
+  size: null, // uniform scale of the sliver, so the cap reads bigger than a shaving
+  pos: null,
+  vel: null,
+  rot: null,
+  spin: null,
+};
+
+// A sliver of leaf: one tapered quad, two triangles, authored at real size so
+// the per-instance scale only ever fine-tunes it. The white vertex colours are
+// what let the per-instance colour through - the same pattern the tree canopies
+// already use.
+function cutFxGeometry() {
+  const L = 0.1;
+  const W = 0.011; // the leaf half width plants.js gives a near plant
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute( "position", new THREE.Float32BufferAttribute( [
+    -L * 0.5, -W, 0,
+    L * 0.5, -W * 0.24, 0,
+    L * 0.5, W * 0.24, 0,
+    -L * 0.5, W, 0,
+  ], 3 ) );
+  geo.setAttribute( "normal", new THREE.Float32BufferAttribute( [ 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1 ], 3 ) );
+  geo.setAttribute( "color", new THREE.Float32BufferAttribute( [ 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 ], 3 ) );
+  geo.setIndex( [ 0, 1, 2, 0, 2, 3 ] );
+  return geo;
+}
+
+// The fragment pose written straight into the instance matrix: three basis
+// columns of a yaw / pitch / roll rotation times the shrinking scale, then the
+// position. Doing it here rather than through an Object3D keeps a cut to plain
+// array writes - there is no dummy to compose and no matrix to copy.
+function writeFxMatrix( i, shrink ) {
+  const m = cutFx.mesh.instanceMatrix.array;
+  const o = i * 16;
+  const p = i * 3;
+  const s = cutFx.size[i] * shrink;
+  m[o + 12] = cutFx.pos[p];
+  m[o + 13] = cutFx.pos[p + 1];
+  m[o + 14] = cutFx.pos[p + 2];
+  m[o + 15] = 1;
+  if ( s <= 0 ) {
+    m[o] = 0; m[o + 1] = 0; m[o + 2] = 0;
+    m[o + 4] = 0; m[o + 5] = 0; m[o + 6] = 0;
+    m[o + 8] = 0; m[o + 9] = 0; m[o + 10] = 0;
+    return;
+  }
+  const rx = cutFx.rot[p], ry = cutFx.rot[p + 1], rz = cutFx.rot[p + 2];
+  const cx = Math.cos( rx ), sx = Math.sin( rx );
+  const cy = Math.cos( ry ), sy = Math.sin( ry );
+  const cz = Math.cos( rz ), sz = Math.sin( rz );
+  m[o] = cz * cy * s;
+  m[o + 1] = sz * cy * s;
+  m[o + 2] = -sy * s;
+  m[o + 4] = ( cz * sy * sx - sz * cx ) * s;
+  m[o + 5] = ( sz * sy * sx + cz * cx ) * s;
+  m[o + 6] = cy * sx * s;
+  m[o + 8] = ( cz * sy * cx + sz * sx ) * s;
+  m[o + 9] = ( sz * sy * cx - cz * sx ) * s;
+  m[o + 10] = cy * cx * s;
 }
 
 // the meter nodes are looked up once and kept: paintMeter runs every frame and
@@ -627,6 +763,239 @@ function verdictText( grade ) {
   if ( grade === "normal" ) return "Cut";
   if ( grade === "fail" ) return "Missed";
   return "";
+}
+
+// ---------------------------------------------------------------------------
+// Sound. Four files, and none of them is fetched until it is asked for: an
+// Audio element made with preload="none" costs nothing on the wire until play(),
+// so a field that never reaches golden hour and is never cut never moves a byte
+// over the network.
+//
+// The hour owns one of them. higurashi (the evening cicada, whose cry is what
+// marks dusk over the paddies) loops for as long as the field is under the
+// golden preset - the page's sunset hour - and is stopped and rewound the moment
+// the hour leaves, so the next golden hour starts the cicada at the top of its
+// loop rather than at wherever the last one left it.
+//
+// The skill check owns the other three, and it answers itself: a great cut, an
+// ordinary cut (good and normal share one cue) and a miss.
+// ---------------------------------------------------------------------------
+export const SOUND = {
+  ambience: "higurashi.mp3",
+  great: "cutgreat.mp3",
+  normal: "cutnormal.mp3",
+  hurt: "hurt.mp3",
+  golden: "golden", // the hour the cicada belongs to
+  ambienceVolume: 0.55, // the loop sits under the field rather than over it
+  effectVolume: 0.9,
+};
+
+export const sound = {
+  volume: Math.min( 1, Math.max( 0, params.sound ) ), // ?sound=0 mutes the field
+  ambience: null, // the looping element while the golden hour holds
+  ambienceName: "",
+  plays: [], // what the page chose to play, oldest first: { name, reason, at, stop }
+  elements: {}, // file -> element, so a cue is fetched once and replayed from memory
+};
+
+// the element for a file, made on the first request and kept: replaying a cue
+// never re-requests the mp3
+function element( name ) {
+  const held = sound.elements[ name ];
+  if ( held ) return held;
+  const a = new Audio( name );
+  a.preload = "none";
+  a.volume = sound.volume * ( name === SOUND.ambience ? SOUND.ambienceVolume : SOUND.effectVolume );
+  sound.elements[ name ] = a;
+  return a;
+}
+
+// the record is a small ring: a long session cuts many plants, and a growing
+// array of play records is the one thing this page would otherwise leak
+function logPlay( name, reason, stop ) {
+  sound.plays.push( { name, reason, at: performance.now(), stop } );
+  if ( sound.plays.length > 64 ) sound.plays.shift();
+}
+
+// one shot, from the start. play() answers a promise the browser may refuse
+// (its autoplay policy wants a user gesture first on some platforms); the
+// refusal is swallowed on purpose - the field keeps running and the console
+// stays clean, which is the one thing the harnesses count
+export function playSound( name, reason ) {
+  if ( sound.volume <= 0 ) return;
+  const a = element( name );
+  a.loop = false;
+  a.currentTime = 0;
+  a.play().catch( () => {} );
+  logPlay( name, reason, false );
+}
+
+// the cicadas follow the hour rather than the pause: a paused field keeps its
+// light, so it keeps its insects
+export function ambience() {
+  if ( state.light === SOUND.golden ) {
+    if ( sound.ambience || sound.volume <= 0 ) return;
+    const a = element( SOUND.ambience );
+    a.loop = true;
+    a.currentTime = 0;
+    a.play().catch( () => {} );
+    sound.ambience = a;
+    sound.ambienceName = SOUND.ambience;
+    logPlay( SOUND.ambience, "golden hour", false );
+    return;
+  }
+  if ( !sound.ambience ) return;
+  const left = sound.ambienceName;
+  sound.ambience.pause();
+  // rewind so the next golden hour starts the cicada from the top of the loop
+  // rather than from wherever the last one left it
+  sound.ambience.currentTime = 0;
+  sound.ambience = null;
+  sound.ambienceName = "";
+  logPlay( left, "left golden hour", true );
+}
+
+// The pool is built once, with every slot parked at zero scale: four verts on
+// one point, nothing rasterised, and the one draw call stays one draw call
+// whether or not the field has ever been cut.
+function buildFx() {
+  const geo = cutFxGeometry();
+  const mat = new THREE.MeshLambertMaterial( {
+    color: "#ffffff",
+    vertexColors: true,
+    side: THREE.DoubleSide,
+    fog: true,
+  } );
+  const f = cutFx;
+  const mesh = new THREE.InstancedMesh( geo, mat, CUT_FX.pool );
+  f.mesh = mesh;
+  f.pool = CUT_FX.pool;
+  f.alive = new Uint8Array( f.pool );
+  f.age = new Float32Array( f.pool );
+  f.life = new Float32Array( f.pool );
+  f.size = new Float32Array( f.pool );
+  f.pos = new Float32Array( f.pool * 3 );
+  f.vel = new Float32Array( f.pool * 3 );
+  f.rot = new Float32Array( f.pool * 3 );
+  f.spin = new Float32Array( f.pool * 3 );
+  // the colour buffer is made once here, so a spawn is an array write rather
+  // than a Color object per fragment
+  mesh.instanceColor = new THREE.InstancedBufferAttribute( new Float32Array( f.pool * 3 ), 3 );
+  const m = mesh.instanceMatrix.array;
+  for ( let i = 0; i < f.pool; i++ ) m[ i * 16 + 15 ] = 1;
+  // the geometry's own bounds say "one sliver at the origin", which says nothing
+  // about where the fragments actually are
+  mesh.frustumCulled = false;
+  // opaque and tiny, so the submission order only ever buys early-z
+  mesh.renderOrder = 0;
+  scene.add( mesh );
+}
+
+// x / y / z is the cut plane, span is how much plant was severed, and r / g / b
+// is that plant's own tint. The first fragment is the cap - the severed top
+// itself, which is why it is the biggest, the slowest and the least flung.
+export function spawnCutFx( x, y, z, span, r, g, b ) {
+  const f = cutFx;
+  const n = CUT_FX.perts > 0 ? Math.round( CUT_FX.perts ) : 0;
+  if ( f.pool === 0 || n === 0 ) return;
+  const col = f.mesh.instanceColor.array;
+  for ( let i = 0; i < n; i++ ) {
+    const slot = f.cursor;
+    f.cursor = f.cursor + 1 >= f.pool ? 0 : f.cursor + 1;
+    // reusing a live slot means the fragment that was in it dies here, so the
+    // live count only moves when the slot was free
+    if ( f.alive[slot] === 0 ) f.live++;
+    f.alive[slot] = 1;
+    const p = slot * 3;
+    const cap = i === 0;
+    // torn off along the severed part rather than all from one point
+    const along = cap ? 0.62 : 0.12 + Math.random() * 0.72;
+    f.pos[p] = x + ( Math.random() - 0.5 ) * 0.1;
+    f.pos[p + 1] = y + Math.max( 0.02, span ) * along;
+    f.pos[p + 2] = z + ( Math.random() - 0.5 ) * 0.1;
+    // downwind and a little across: the severed part topples the way the wind
+    // bends the rest of the stand
+    const fwd = ( cap ? 0.3 : 0.45 ) + Math.random() * ( cap ? 0.4 : 0.95 );
+    const side = ( Math.random() - 0.5 ) * 0.8;
+    f.vel[p] = DOWNWIND_X * fwd - DOWNWIND_Z * side;
+    f.vel[p + 1] = ( cap ? 0.12 : 0.35 ) + Math.random() * ( cap ? 0.3 : 0.75 );
+    f.vel[p + 2] = DOWNWIND_Z * fwd + DOWNWIND_X * side;
+    f.rot[p] = Math.random() * 6.2832;
+    f.rot[p + 1] = Math.random() * 6.2832;
+    f.rot[p + 2] = Math.random() * 6.2832;
+    const rpm = ( cap ? 1.2 : 3.0 ) + Math.random() * ( cap ? 1.6 : 6.0 );
+    f.spin[p] = rpm * ( Math.random() - 0.5 ) * 2;
+    f.spin[p + 1] = rpm * ( Math.random() - 0.5 ) * 2;
+    f.spin[p + 2] = rpm * ( Math.random() - 0.5 ) * 2;
+    f.size[slot] = ( cap ? 1.7 : 0.55 ) + Math.random() * ( cap ? 0.6 : 0.62 );
+    f.age[slot] = 0;
+    f.life[slot] = CUT_FX.life * ( cap ? 1.15 : 0.7 + Math.random() * 0.45 );
+    // the plant's own colour mixed toward the pale straw of a torn end
+    const mix = 0.3 + Math.random() * 0.34;
+    const v = 0.86 + Math.random() * 0.26;
+    col[p] = ( r + ( 1.22 - r ) * mix ) * v;
+    col[p + 1] = ( g + ( 1.06 - g ) * mix ) * v;
+    col[p + 2] = ( b + ( 0.6 - b ) * mix ) * v;
+    // written here as well as in stepFx: a recycled slot still carries the pose
+    // of the fragment that was in it, and that pose must not survive this frame
+    writeFxMatrix( slot, 1 );
+  }
+  f.mesh.instanceMatrix.needsUpdate = true;
+  f.mesh.instanceColor.needsUpdate = true;
+}
+
+// The fragments take the same capped simulation step as the stalks, so pausing
+// holds them mid-air along with everything else in the environment.
+export function stepFx( dt ) {
+  const f = cutFx;
+  if ( f.pool === 0 || f.live === 0 ) return;
+  const m = f.mesh.instanceMatrix.array;
+  // the wind catches a fragment as it bends the stand
+  const push = CUT_FX.drift * ( 0.2 + uniforms.uWind.value ) * dt;
+  let touched = false;
+  for ( let i = 0; i < f.pool; i++ ) {
+    if ( f.alive[i] === 0 ) continue;
+    const p = i * 3;
+    const a = f.age[i] + dt;
+    if ( a >= f.life[i] ) {
+      f.alive[i] = 0;
+      f.live--;
+      const o = i * 16;
+      m[o] = 0; m[o + 1] = 0; m[o + 2] = 0;
+      m[o + 4] = 0; m[o + 5] = 0; m[o + 6] = 0;
+      m[o + 8] = 0; m[o + 9] = 0; m[o + 10] = 0;
+      m[o + 15] = 1;
+      touched = true;
+      continue;
+    }
+    f.age[i] = a;
+    f.vel[p] += DOWNWIND_X * push;
+    f.vel[p + 2] += DOWNWIND_Z * push;
+    f.vel[p + 1] -= CUT_FX.fall * dt;
+    f.pos[p] += f.vel[p] * dt;
+    f.pos[p + 1] += f.vel[p + 1] * dt;
+    f.pos[p + 2] += f.vel[p + 2] * dt;
+    if ( f.pos[p + 1] < CUT_FX.floor ) {
+      f.pos[p + 1] = CUT_FX.floor;
+      // a light fragment bounces once and then lies down on the paddy floor
+      if ( f.vel[p + 1] < -0.5 ) f.vel[p + 1] = -f.vel[p + 1] * 0.24;
+      else f.vel[p + 1] = 0;
+      f.vel[p] *= 0.5;
+      f.vel[p + 2] *= 0.5;
+      f.spin[p] *= 0.25;
+      f.spin[p + 1] *= 0.25;
+      f.spin[p + 2] *= 0.25;
+    }
+    f.rot[p] += f.spin[p] * dt;
+    f.rot[p + 1] += f.spin[p + 1] * dt;
+    f.rot[p + 2] += f.spin[p + 2] * dt;
+    // the last third of its life shrinks it away, so a fragment settles rather
+    // than popping out of existence
+    const t = a / f.life[i];
+    writeFxMatrix( i, t < 0.7 ? 1 : 1 - ( t - 0.7 ) / 0.3 );
+    touched = true;
+  }
+  if ( touched ) f.mesh.instanceMatrix.needsUpdate = true;
 }
 
 export function buildField() {
@@ -1412,6 +1781,10 @@ export function frame( now ) {
     // capped step so a minute stays a minute
     cycleLight( raw );
   }
+  // the cicadas follow the hour rather than the pause: a paused field keeps its
+  // light, so it keeps its insects - pause holds the picture, not the field's
+  // own sounds
+  ambience();
   easeRig( dt );
   applyRig();
   stepCamera( dt );
@@ -1426,6 +1799,9 @@ export function frame( now ) {
       uniforms.uWindSpeed.value,
       uniforms.uGust.value
     );
+  // the fragment burst belongs to the environment, so it freezes with the rest
+  // of it when the field is paused
+  if ( !state.paused ) stepFx( dt );
   stepSkill( now );
   renderer.render( scene, camera );
 
@@ -1477,6 +1853,19 @@ export function start() {
       gradeAt,
       SKILL,
       TOUCH,
+      // the fragment burst, so a harness can count what one cut threw off and
+      // watch it fall rather than infer it from pixels
+      cutFx,
+      CUT_FX,
+      // the burst's own step, so a harness can park fragments anywhere and have
+      // the page rewrite their matrices rather than duplicating the matrix math
+      stepFx,
+      // the cues and the record of what the page chose to play, so a harness can
+      // check the sound an outcome was answered with rather than listen to it
+      sound,
+      SOUND,
+      playSound,
+      ambience,
       // the url knobs, so a harness can read the hour length it is actually
       // running under rather than assume it
       params,
