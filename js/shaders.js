@@ -1,7 +1,8 @@
 // js/shaders.js — the single place that owns every GLSL string in the scene.
 //
-// Everything green here is procedural: no textures are loaded, so the page
-// works offline. The rice field is one InstancedMesh per level of detail whose
+// Everything green here is procedural: no textures are loaded, so the only
+// thing the page fetches is the pinned three.js build itself. The rice field is
+// one InstancedMesh per level of detail whose
 // MeshLambertMaterial is patched (onBeforeCompile) with a wind function that
 // runs entirely on the GPU - the CPU never touches a plant per frame.
 import * as THREE from "three";

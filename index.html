@@ -6,15 +6,28 @@
     <title>VERDANT — A sea of green</title>
     <meta
       name="description"
-      content="A living rice field in the browser: procedural plants, wind on the GPU, one draw call per level of detail, and a camera you walk with the arrow keys, WASD and the pointer."
+      content="A living rice field in the browser: procedural plants, wind on the GPU, one draw call per level of detail, and a camera you walk with the arrow keys, WASD and the pointer - or with a thumb pad, a drag and a tap on a phone."
     />
     <link rel="stylesheet" href="css/style.css" />
     <link rel="icon" href="data:," />
+    <!--
+      three.js is the page's only library and it comes from a CDN, pinned to
+      r170 - the exact build the onBeforeCompile patches in js/shaders.js are
+      written against (verified: 1314659 bytes, sha256 ce1fa418de16a194...).
+      Nothing is vendored in this project any more; to run with no network at
+      all, install the same build with "npm install three@0.170.0" and point
+      the map at "./node_modules/three/build/three.module.js". The examples/jsm
+      prefix is mapped so an addon could be imported as
+      "three/examples/jsm/controls/PointerLockControls.js".
+      Import maps take plain url strings only - Chrome rejects the {url,integrity}
+      object form, so the pin is enforced by the version in the url, not SRI.
+    -->
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
     <script type="importmap">
       {
         "imports": {
-          "three": "./node_modules/three/build/three.module.js",
-          "three/": "./node_modules/three/build/"
+          "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+          "three/examples/jsm/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
         }
       }
     </script>
@@ -50,6 +63,12 @@
         <span id="move-readout" class="readout">arrow keys / WASD walk · hold + drag to look</span>
       </div>
 
+      <div class="row rig">
+        <span class="label">Elevate</span>
+        <button class="hold" data-hold="1">Rise</button>
+        <button class="hold" data-hold="-1">Lower</button>
+      </div>
+
       <div class="row wind">
         <span class="label">Wind</span>
         <div id="wind-track" class="track">
@@ -64,6 +83,10 @@
         <button data-action="pause" data-value="false">Resume</button>
       </div>
     </section>
+
+    <div id="pad" class="pad" aria-label="Walk pad">
+      <div id="pad-knob" class="knob"></div>
+    </div>
 
     <div id="skill" class="skill" aria-label="Skill check" hidden>
       <div class="band" id="skill-normal"></div>

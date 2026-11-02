@@ -12,7 +12,10 @@
 //                 pass cuts the plant
 //
 // Nothing is loaded: every geometry and material here is procedural, so the
-// page works from a plain static server with no assets and no network.
+// page's only dependency is three.js itself, which index.html's import map
+// pulls from a CDN pinned to r170 - the exact build the onBeforeCompile
+// injections in js/shaders.js are written against. Nothing is vendored here;
+// "npm install three@0.170.0" plus a one-line url swap is the offline fallback.
 import * as THREE from "three";
 import { buildPlantGeometry, mulberry32 } from "./plants.js";
 import {
@@ -34,6 +37,7 @@ export const state = {
   view: "open",
   quality: "high",
   walk: true, // free camera walking: arrow keys / WASD move, a held drag looks
+  touch: false, // touch controls armed: a thumb pad walks, a tap arms the check
 };
 
 export const params = (() => {
@@ -56,6 +60,7 @@ export const params = (() => {
     seed: num( "seed", 20260 ),
     autotest: num( "autotest", 0 ) > 0,
     walk: num( "walk", 1 ) > 0, // 0 = keep the camera locked to the preset framings
+    touch: num( "touch", 0 ) > 0, // 1 = force the phone layout on a desktop
   };
 })();
 
@@ -65,6 +70,20 @@ state.view = params.view;
 state.paused = params.paused;
 state.quality = params.quality;
 state.walk = params.walk;
+
+// A phone or tablet has no keys, so it gets its own control set: a thumb pad for
+// walking, hold-to-press elevation buttons, and a tap (never a drag) to arm the
+// skill check. The pointer kind is read once at load - it never changes during a
+// session - and ?touch=1 forces the same layout on a desktop so the harness can
+// drive it. app.js puts .touch on <html> and the stylesheet keys every phone rule
+// on that class, so the DOM and the CSS cannot disagree about which layout is
+// live.
+export function coarsePointer() {
+  if ( window.matchMedia && window.matchMedia( "(pointer: coarse)" ).matches ) return true;
+  return "ontouchstart" in window;
+}
+
+state.touch = params.touch || coarsePointer();
 
 // A single shared clock uniform: every patched material reads the same one, so
 // pausing freezes the whole environment at once rather than one layer at a time.
@@ -768,6 +787,18 @@ const WALK = {
   dragSens: 0.0045, // radians per pixel of drag
 };
 
+// Touch tuning. A finger is not a cursor: it is wider than a stem, it slides
+// instead of hovering, and the one gesture it makes on the field (press and
+// slide) is exactly the gesture that must NOT spend a skill check. So a tap is
+// decided on lift-off from how long and how far the finger was down, and the
+// plant pick gets a wider radius because the contact patch is that wide.
+export const TOUCH = {
+  padDead: 0.14, // a thumb resting this close to the pad centre means "stand still"
+  tapMs: 320, // a touch shorter than this on the field is a tap, longer is a look
+  tapPx: 16, // and it must not have slid further than this to still count as one
+  tapRadius: 26, // a fingertip covers more glass than a cursor, so widen the pick
+};
+
 export const cam = {
   view: params.view in VIEWS ? params.view : "open",
   target: params.view in VIEWS ? params.view : "open",
@@ -779,6 +810,9 @@ export const cam = {
   move: { x: 0, y: 0, z: 0 }, // world offset from the preset framing
   keys: {}, // held move keys, keyed by KeyboardEvent.code
   drag: null, // last pointer position while the button is down
+  pad: { x: 0, y: 0, on: false }, // thumb pad: knob offset from the pad centre, -1..1, and whether a finger holds it
+  hold: 0, // -1 / +1 while a hold-to-elevate button is pressed; the phone has no E / Q keys
+  tap: null, // a finger down on the field: { x0, y0, x, y, moved, t0 } until lift says whether it was a tap
 };
 
 // A view button is also a framing reset: whatever the viewer walked to is
@@ -834,10 +868,21 @@ export function currentViewPose() {
 export function stepCamera( dt ) {
   if ( !state.walk ) return;
   const k = cam.keys;
-  const fwd = ( k.ArrowUp ? 1 : 0 ) + ( k.KeyW ? 1 : 0 ) - ( k.ArrowDown ? 1 : 0 ) - ( k.KeyS ? 1 : 0 );
-  const side = ( k.ArrowRight ? 1 : 0 ) + ( k.KeyD ? 1 : 0 ) - ( k.ArrowLeft ? 1 : 0 ) - ( k.KeyA ? 1 : 0 );
-  const rise = ( k.KeyE ? 1 : 0 ) - ( k.KeyQ ? 1 : 0 );
-  if ( !fwd && !side && !rise ) return;
+  let fwd = ( k.ArrowUp ? 1 : 0 ) + ( k.KeyW ? 1 : 0 ) - ( k.ArrowDown ? 1 : 0 ) - ( k.KeyS ? 1 : 0 );
+  let side = ( k.ArrowRight ? 1 : 0 ) + ( k.KeyD ? 1 : 0 ) - ( k.ArrowLeft ? 1 : 0 ) - ( k.KeyA ? 1 : 0 );
+  const rise = ( k.KeyE ? 1 : 0 ) - ( k.KeyQ ? 1 : 0 ) + cam.hold;
+
+  // The thumb pad stacks analog motion on top of the keys: the knob's offset
+  // from the pad centre is the push, so a thumb near the middle creeps and one
+  // stretched to the rim walks at full pace. Keys stay digital, so a desktop
+  // that never shows the pad gets exactly the step it always had.
+  if ( cam.pad.on ) {
+    fwd += -cam.pad.y; // pushing the knob up the pad means walking away
+    side += cam.pad.x;
+  }
+
+  const reach = Math.hypot( fwd, side );
+  if ( reach <= TOUCH.padDead && !rise ) return;
 
   const p = currentViewPose();
   const yaw = THREE.MathUtils.degToRad( p.yaw ) + cam.look.yaw;
@@ -845,8 +890,11 @@ export function stepCamera( dt ) {
   const cos = Math.cos( yaw );
   // the camera looks down its own -Z, so world forward is (-sin, 0, -cos) and
   // world right is (cos, 0, -sin)
-  const step = WALK.speed * dt;
-  const run = Math.hypot( fwd, side ) || 1;
+  const run = reach || 1;
+  // direction is normalized once, so the pad's magnitude is what sets the pace:
+  // keys read as reach 1 (a diagonal keys push is normalized to the same speed
+  // as a cardinal one, exactly as before), a half pad push walks half as fast
+  const step = WALK.speed * dt * Math.min( 1, reach );
   cam.move.x += ( -sin * fwd + cos * side ) * step / run;
   cam.move.z += ( -cos * fwd - sin * side ) * step / run;
   cam.move.y += rise * WALK.rise * dt;
@@ -1005,6 +1053,103 @@ export function wireUI() {
     } );
   }
 
+  // -------------------------------------------------------------------------
+  // Touch. A phone has no keys, so walking moves onto the glass: a thumb pad in
+  // the lower right (held with the near thumb) steers through the same stepCamera
+  // math the keys feed, and a pair of hold-to-press buttons covers the E / Q
+  // rise. Both are plain DOM, so they take the same pointer events as everything
+  // else, and a desktop never sees them - the stylesheet only paints them once
+  // app.js marks <html> with .touch, which is the same test that armed them.
+  // -------------------------------------------------------------------------
+  if ( state.touch ) {
+    document.documentElement.classList.add( "touch" );
+    // a fingertip covers more glass than a cursor, so the pick has to be wider
+    // or taps keep missing the stem they were aimed at
+    hover.radius = TOUCH.tapRadius;
+
+    const moveReadout = document.getElementById( "move-readout" );
+    if ( moveReadout ) moveReadout.textContent = "thumb pad walks · drag to look · tap a plant";
+
+    const pad = document.getElementById( "pad" );
+    const knob = document.getElementById( "pad-knob" );
+    if ( pad ) {
+      // park the pad just above the control bar rather than in a fixed corner:
+      // the bar's height is whatever its rows came out to (they wrap on a narrow
+      // phone), and a landscape phone is shorter than the bar plus a pad, so the
+      // clamp keeps the pad on the glass instead of under the buttons
+      const bar = document.getElementById( "panel" );
+      if ( bar ) {
+        const b = bar.getBoundingClientRect();
+        const vh = window.innerHeight || b.bottom;
+        const padH = pad.getBoundingClientRect().height;
+        const above = vh - b.top + 14; // bar top plus a thumb's gap, from the bottom edge
+        const highest = Math.max( 8, vh - padH - 8 ); // never clip off the top
+        pad.style.bottom = Math.min( above, highest ) + "px";
+      }
+
+      let box = null;
+
+      const push = ( cx, cy ) => {
+        if ( !box || box.width <= 0 ) return;
+        const rx = box.width / 2;
+        const ry = box.height / 2;
+        let x = ( cx - ( box.left + rx ) ) / rx;
+        let y = ( cy - ( box.top + ry ) ) / ry;
+        const m = Math.hypot( x, y );
+        if ( m > 1 ) {
+          // the knob stops at the rim, so the push never reads as more than a
+          // full walk and a thumb that slides past the edge keeps walking straight
+          x /= m;
+          y /= m;
+        }
+        cam.pad.x = x;
+        cam.pad.y = y;
+        if ( knob ) {
+          // the knob rides up to 34px of a 58px radius, so it stays inside the rim
+          knob.style.transform = "translate(" + 34 * cam.pad.x + "px," + 34 * cam.pad.y + "px)";
+        }
+      };
+
+      const engage = ( e ) => {
+        box = pad.getBoundingClientRect();
+        if ( box.width <= 0 ) return;
+        cam.pad.on = true;
+        push( e.clientX, e.clientY );
+      };
+
+      const release = () => {
+        cam.pad.on = false;
+        cam.pad.x = 0;
+        cam.pad.y = 0;
+        if ( knob ) knob.style.transform = "";
+      };
+
+      pad.addEventListener( "pointerdown", engage );
+      pad.addEventListener( "pointermove", ( e ) => {
+        if ( cam.pad.on ) push( e.clientX, e.clientY );
+      } );
+      pad.addEventListener( "pointerup", release );
+      pad.addEventListener( "pointerleave", release );
+    }
+
+    // Hold-to-elevate: the press is what matters rather than a click, so these
+    // listen to the pointer. data-hold rather than data-action keeps them out of
+    // the button loop above, which would otherwise read a tap as a toggle.
+    for ( const node of document.querySelectorAll( "[data-hold]" ) ) {
+      const dir = parseFloat( node.getAttribute( "data-hold" ) );
+      node.addEventListener( "pointerdown", ( e ) => {
+        cam.hold = dir;
+        node.classList.toggle( "on", true );
+      } );
+      const lift = () => {
+        if ( cam.hold === dir ) cam.hold = 0;
+        node.classList.toggle( "on", false );
+      };
+      node.addEventListener( "pointerup", lift );
+      node.addEventListener( "pointerleave", lift );
+    }
+  }
+
   // Keyboard. Move keys are tracked rather than fired: keydown repeats would
   // otherwise stutter the pace, so the actual step is taken from the clock in
   // stepCamera and a held key just glides. Codes (not e.key) are matched so the
@@ -1161,10 +1306,16 @@ export function wireUI() {
       const r = canvas.getBoundingClientRect();
       if ( r.width <= 0 || r.height <= 0 ) return;
       pickPlant( e.clientX - r.left, e.clientY - r.top, r.width, r.height );
-      // the click that lands on a plant arms the meter and the next click plays
-      // it. A click on empty ground or sky arms nothing, so a check can never be
-      // spent on nothing. The check stays bound to the plant it was armed on, so
-      // a drag between the two clicks cannot move the target
+      // A cursor arms on the press: it hovers first, so the press is a decision
+      // the viewer already made. A finger cannot hover, and press-and-slide is
+      // the one gesture the field uses to look around, so arming on press would
+      // spend a check every time a viewer merely turned the head. The finger
+      // instead leaves a tap record here and lift-off decides from how long and
+      // how far it was down.
+      if ( e.pointerType === "touch" ) {
+        cam.tap = { x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY, moved: 0, t0: performance.now() };
+        return;
+      }
       if ( skill.active ) resolveSkill();
       else if ( hover.tier >= 0 ) armSkill();
     } );
@@ -1174,6 +1325,14 @@ export function wireUI() {
         cam.mouse.x = ( e.clientX - r.left ) / r.width * 2 - 1;
         cam.mouse.y = -( ( e.clientY - r.top ) / r.height * 2 - 1 );
         pickPlant( e.clientX - r.left, e.clientY - r.top, r.width, r.height );
+      }
+      if ( cam.tap ) {
+        cam.tap.moved += Math.hypot( e.clientX - cam.tap.x, e.clientY - cam.tap.y );
+        cam.tap.x = e.clientX;
+        cam.tap.y = e.clientY;
+        // the finger slid far enough that this was a look: drop the tap record
+        // so the gesture arms nothing and the check stays unspent
+        if ( cam.tap.moved > TOUCH.tapPx ) cam.tap = null;
       }
       if ( !cam.drag ) return; // no hover look: the pointer alone does nothing
       const dx = e.clientX - cam.drag.x;
@@ -1188,9 +1347,24 @@ export function wireUI() {
     } );
     canvas.addEventListener( "pointerup", ( e ) => {
       cam.drag = null;
+      if ( !cam.tap ) return;
+      const slid = Math.hypot( e.clientX - cam.tap.x0, e.clientY - cam.tap.y0 );
+      const held = performance.now() - cam.tap.t0;
+      cam.tap = null;
+      // the finger was down long or slid far: that was a look, and a look never
+      // spends a check
+      if ( held > TOUCH.tapMs || slid > TOUCH.tapPx ) return;
+      // a tap: re-pick where the finger left the glass so the check binds to the
+      // plant under the tap rather than wherever the finger drifted
+      const r = canvas.getBoundingClientRect();
+      if ( r.width <= 0 || r.height <= 0 ) return;
+      pickPlant( e.clientX - r.left, e.clientY - r.top, r.width, r.height );
+      if ( skill.active ) resolveSkill();
+      else if ( hover.tier >= 0 ) armSkill();
     } );
     canvas.addEventListener( "pointerleave", ( e ) => {
       cam.drag = null;
+      cam.tap = null; // a finger that left the field mid-touch is not a tap
       setHover( -1, -1, 0 ); // the pointer left the field: nothing is outlined
     } );
     // the panel sits on top of the canvas, so a pointer that lands on it never
@@ -1304,6 +1478,7 @@ export function start() {
       harvest,
       gradeAt,
       SKILL,
+      TOUCH,
     };
   }
   perf.lastStats = performance.now();
