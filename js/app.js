@@ -6,7 +6,9 @@
 //   tree line     instanced trunks + canopies, irregular spacing
 //   far field     one ring plane, coloured by the same wave train as the rice
 //   ground        lit paddy floor under the rice, procedural
-//   rice          three InstancedMesh tiers (near / mid / far), GPU wind
+//   rice          three InstancedMesh tiers (near / mid / far), GPU wind, and
+//                 one plant shared by all of them - the lush foreground one,
+//                 its drooping head hung with ripe gold ears
 //   hover         pointing at the field outlines one plant in bright leaf edges
 //   skill check   clicking a plant arms a meter, a second click plays it and a
 //                 pass cuts the plant
@@ -467,7 +469,10 @@ function buildTreeLine( x0, x1, z, seed ) {
 // ---------------------------------------------------------------------------
 // The rice itself.
 //
-// One jittered grid pass per LOD tier. Rows stay rows (that is what sells the
+// One jittered grid pass per tier. The tiers are distance bands that set
+// spacing and submission order, not levels of plant detail: every band carries
+// the same plant, so a distant stem is the foreground one seen from far away
+// rather than a cheaper stand-in. Rows stay rows (that is what sells the
 // agronomy at a distance) but every plant is nudged off its lattice point,
 // roughly 7% of the lattice is skipped to leave gaps, and near the camera a
 // few extra plants are tucked in beside each other to make small clumps.
@@ -1009,10 +1014,18 @@ export function buildField() {
   const Z1 = 15;
 
   const tierSpec = [
-    { name: "near", detail: "near", r0: 0, r1: 7.2, step: 0.31, lean: 0.05 },
-    { name: "mid", detail: "mid", r0: 7.2, r1: 25, step: 0.56, lean: 0.06 },
-    { name: "far", detail: "far", r0: 25, r1: 84, step: 1.28, lean: 0.07 },
+    { name: "near", r0: 0, r1: 7.2, step: 0.31, lean: 0.05 },
+    { name: "mid", r0: 7.2, r1: 25, step: 0.56, lean: 0.06 },
+    { name: "far", r0: 25, r1: 84, step: 1.28, lean: 0.07 },
   ];
+
+  // The plant is built once for the whole field: the lush foreground one, with
+  // its four culm strips, six leaves and its drooping rice head. The tiers
+  // below only differ in where they sit, how thickly they are seeded and which
+  // way they are submitted, so the same per-vertex arrays are handed to all
+  // three geometries and only the per-instance attributes (seed, tint,
+  // highlight, wave) are built per tier.
+  const lush = buildPlantGeometry( "near" );
 
   const palette = [ "#47612c", "#587033", "#6c8340", "#879457", "#3d5628", "#7b8b4d" ];
   const pal = [];
@@ -1030,7 +1043,9 @@ export function buildField() {
         if ( d < spec.r0 || d >= spec.r1 ) continue;
         if ( rnd() < 0.07 ) continue; // gaps in the stand
         spots.push( px, pz, d );
-        if ( spec.detail === "near" && rnd() > 0.9 ) {
+        // a second seed beside some of the foreground plants: a density rule,
+        // keyed to the band rather than to a plant detail that no longer exists
+        if ( spec.name === "near" && rnd() > 0.9 ) {
           spots.push( px + ( rnd() - 0.5 ) * 0.5, pz + ( rnd() - 0.5 ) * 0.5, d );
         }
       }
@@ -1038,7 +1053,8 @@ export function buildField() {
 
     const count = spots.length / 3;
     const geo = new THREE.BufferGeometry();
-    const src = buildPlantGeometry( spec.detail );
+    // the same arrays for every tier: three geometries, one plant
+    const src = lush;
     geo.setAttribute( "position", new THREE.Float32BufferAttribute( src.position, 3 ) );
     geo.setAttribute( "normal", new THREE.Float32BufferAttribute( src.normal, 3 ) );
     geo.setAttribute( "aFlex", new THREE.Float32BufferAttribute( src.aFlex, 1 ) );

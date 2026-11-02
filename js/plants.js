@@ -4,7 +4,13 @@
 // A plant is three things, and all three matter for the close-up read:
 //   culm    the main stem - a curved, tapered spine (four ribbons near up)
 //   leaves  slender ribbons that leave the stem, rise, then droop over
-//   panicle the drooping rice head, studded with single-grain quads
+//   panicle the drooping rice head: kernels at its edge, each with an awn of
+//           chaff past the tip, so the head hangs rather than bristles out
+//
+// `detail` can scale the ribbon counts down for a cheaper stand-in, but the
+// page stopped asking for one: the field tiers are distance bands rather than
+// levels of plant detail, and all three of them build "near", so every plant
+// in the stand is this plant. The cheaper variants remain only as a knob.
 //
 // Per-vertex attributes the wind shader reads:
 //   aFlex  0 at the root, larger toward the tip -> roots stay planted
@@ -105,7 +111,8 @@ export function buildPlantGeometry(detail) {
   }
 
   // ---- leaves: they leave the stem, rise a little, then droop over
-  const leafCount = detail === "near" ? 6 : detail === "mid" ? 4 : 2;
+  // a fuller plant: seven leaves rather than six, so the skirt reads dense
+  const leafCount = detail === "near" ? 7 : detail === "mid" ? 4 : 2;
   const leafRings = detail === "near" ? 7 : detail === "mid" ? 4 : 2;
   const leafW = detail === "near" ? 0.0135 : detail === "mid" ? 0.0125 : 0.017;
   for ( let li = 0; li < leafCount; li++ ) {
@@ -158,7 +165,9 @@ export function buildPlantGeometry(detail) {
   // ---- panicle: the rice head droops over; grains hang off the rachis
   if ( detail !== "far" ) {
     const pRings = detail === "near" ? 7 : 5;
-    const Lp = 0.26 + rnd() * 0.06;
+    // a long rachis: the head has to reach past the leaf tips so the ears sit
+    // at the edge of the plant rather than inside the skirt of leaves
+    const Lp = 0.30 + rnd() * 0.08;
     const az = rnd() * Math.PI * 2;
     const dx = Math.cos( az ), dz = Math.sin( az );
     const topX = bendX, topZ = bendZ;
@@ -166,7 +175,7 @@ export function buildPlantGeometry(detail) {
     for ( let i = 0; i < pRings; i++ ) {
       const t = i / ( pRings - 1 );
       const reach = Lp * ( t - 0.05 * t * t );
-      const rise = 0.52 * t - 1.30 * t * t;
+      const rise = 0.55 * t - 1.45 * t * t;
       ppath.push( [ topX + dx * reach, H + Lp * rise, topZ + dz * reach ] );
     }
     addRibbon(
@@ -179,9 +188,15 @@ export function buildPlantGeometry(detail) {
       }
     );
 
-    const grains = detail === "near" ? 8 : 4;
+    // the ears: kernels down the outer rachis, each one angled out and down so
+    // the head hangs rather than bristling straight out. Two crossed quads give
+    // a kernel a body from any angle, and the near tier adds an awn - a thin
+    // bristle of chaff past the tip - which is what makes the cluster read as
+    // an ear at a distance instead of as a string of beads.
+    const grains = detail === "near" ? 13 : 5;
+    const awns = detail === "near" ? 7 : 0;
     for ( let gi = 0; gi < grains; gi++ ) {
-      const t = 0.34 + ( gi / grains ) * 0.66;
+      const t = 0.28 + ( gi / grains ) * 0.72;
       const seg = Math.min( pRings - 2, Math.floor( t * ( pRings - 1 ) ) );
       const a = ppath[ seg ], b = ppath[ seg + 1 ];
       const k = t * ( pRings - 1 ) - seg;
@@ -193,15 +208,36 @@ export function buildPlantGeometry(detail) {
       const gx = cx + dx * off * 0.5 + 0.004 * side;
       const gz = cz + dz * off * 0.5;
       const gy = cy - 0.010 - 0.012 * ( t - 0.5 );
-      const gl = 0.019, gw = 0.0062;
+      // kernels vary a little down the head: length, and ripeness, so the
+      // shaded inner grains sit greener under the sunlit outer ones
+      const gl = 0.024 + ( gi % 3 ) * 0.004;
+      const gw = 0.0075;
+      const hang = 0.016 + 0.012 * t;
       const gpath = [
-        [ gx - dx * gl, gy + 0.004, gz - dz * gl ],
-        [ gx + dx * gl * 0.7, gy - 0.003, gz + dz * gl * 0.7 ],
+        [ gx - dx * gl * 0.30, gy + 0.003, gz - dz * gl * 0.30 ],
+        [ gx + dx * gl * 0.70, gy - hang * 0.6, gz + dz * gl * 0.70 ],
       ];
-      addRibbon( gpath, ( i, n ) => gw, () => [ 0, 1, 0 ], () => [ 1.5, 6.3 + gi * 0.7, 1, 1 ] );
+      // the kernel tapers to its tip: wide where it joins the head, narrow at
+      // the far end, so a quad reads as a grain rather than as a bead
+      const kernel = ( i, n ) => gw * ( i === 0 ? 0.62 : 0.12 );
+      const grain = () => [ 1.5, 6.3 + gi * 0.7, 0.90 + 0.10 * ( gi / grains ), 1 ];
+      addRibbon( gpath, kernel, () => [ 0, 1, 0 ], grain );
       if ( detail === "near" ) {
-        // a crossing quad gives the grain body when seen from any angle
-        addRibbon( gpath, ( i, n ) => gw, () => [ -dz, 0, dx ], () => [ 1.5, 6.3 + gi * 0.7, 1, 1 ] );
+        // a crossing quad gives the kernel body when seen from any angle
+        addRibbon( gpath, kernel, () => [ -dz, 0, dx ], grain );
+      }
+      if ( gi < awns ) {
+        // the awn: chaff past the kernel tip, on the same out-and-down line
+        const tx = gpath[ 1 ][0], ty = gpath[ 1 ][1], tz = gpath[ 1 ][2];
+        addRibbon(
+          [
+            [ tx, ty, tz ],
+            [ tx + dx * 0.020, ty - 0.020, tz + dz * 0.020 ],
+          ],
+          ( i, n ) => 0.0011 * ( i === 0 ? 1 : 0.25 ),
+          () => [ 0, 1, 0 ],
+          grain
+        );
       }
     }
   }

@@ -194,11 +194,14 @@ gl_Position = projectionMatrix * mvPosition;
 `;
 
 // Per-vertex colour ramp: cool and dark at the base, warmer and brighter at
-// the tip. vShade fakes cavity darkening near the roots of a clump.
+// the tip. The ears are ripe gold rather than the olive the plant's own green
+// tint would leave them in, so aPart also fades that tint out at the head.
+// vShade fakes cavity darkening near the roots of a clump.
 export const TINT_CALC = `
-vec3 straw = vec3( 1.22, 1.06, 0.60 );
-vec3 foliage = mix( vec3( 0.80, 1.00, 0.82 ), straw, aPart * 0.92 );
-vTint = aTint * foliage * mix( vec3( 0.58, 0.64, 0.74 ), vec3( 1.10, 1.05, 0.95 ), aTone );
+vec3 straw = vec3( 1.34, 1.04, 0.30 );
+vec3 foliage = mix( vec3( 0.80, 1.00, 0.82 ), straw, aPart * 0.94 );
+vec3 earTint = mix( aTint, vec3( 0.94, 0.90, 0.82 ), aPart * 0.82 );
+vTint = earTint * foliage * mix( vec3( 0.58, 0.64, 0.74 ), vec3( 1.10, 1.05, 0.95 ), aTone );
 vShade = mix( 0.72, 1.0, clamp( aTone * 1.15, 0.0, 1.0 ) );
 `;
 
