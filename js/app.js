@@ -986,8 +986,11 @@ export function applyRig() {
 // ---------------------------------------------------------------------------
 // Controls. The page owns the DOM; this module owns the scene, so the panel
 // stays declarative in the markup and every control is a small state change
-// here. Pointer events on the slider track drag the handle; buttons carry
-// data-action / data-value.
+// here. Only the light, view and (on a phone) elevation rows are buttons now:
+// the wind slider, the camera row and the playback row were removed, so
+// Shift+Arrow nudges the wind, Space toggles pause, and the arrow keys / WASD
+// walk with nothing gating them. setWind / setPaused / setWalk stay exported
+// because the autotest harness drives them straight over the DevTools protocol.
 // ---------------------------------------------------------------------------
 export function setWind( v ) {
   state.wind = Math.max( 0, Math.min( 1, v ) );
@@ -998,57 +1001,15 @@ export function setPaused( p ) {
   state.paused = !!p;
 }
 
-export function windLabel( v ) {
-  if ( v < 0.06 ) return "still air";
-  if ( v < 0.28 ) return "a breath";
-  if ( v < 0.5 ) return "gentle breeze";
-  if ( v < 0.72 ) return "fresh wind";
-  return "gusting";
-}
-
 export function wireUI() {
-  const track = document.getElementById( "wind-track" );
-  const handle = document.getElementById( "wind-handle" );
-  const readout = document.getElementById( "wind-readout" );
-
-  const applyFromClientX = ( clientX ) => {
-    if ( !track ) return;
-    const r = track.getBoundingClientRect();
-    if ( r.width <= 0 ) return;
-    setWind( ( clientX - r.left ) / r.width );
-    if ( handle ) {
-      handle.style.left = ( 100 * state.wind ) + "%";
-    }
-    if ( readout ) readout.textContent = windLabel( state.wind );
-  };
-
-  if ( track ) {
-    let dragging = false;
-    track.addEventListener( "pointerdown", ( e ) => {
-      dragging = true;
-      applyFromClientX( e.clientX );
-    } );
-    track.addEventListener( "pointermove", ( e ) => {
-      if ( dragging ) applyFromClientX( e.clientX );
-    } );
-    track.addEventListener( "pointerup", ( e ) => {
-      dragging = false;
-      applyFromClientX( e.clientX );
-    } );
-    track.addEventListener( "pointerleave", () => {
-      dragging = false;
-    } );
-  }
-
   for ( const node of document.querySelectorAll( "[data-action]" ) ) {
     node.addEventListener( "click", ( e ) => {
       const action = node.getAttribute( "data-action" );
       const value = node.getAttribute( "data-value" );
+      // only light and view still carry data-action; pause and walk lost their
+      // buttons, so nothing here can reach setPaused or setWalk from a click
       if ( action === "light" ) setLight( value );
       else if ( action === "view" ) setView( value );
-      else if ( action === "pause" ) setPaused( value === "true" );
-      else if ( action === "walk" ) setWalk( value );
-      if ( action === "wind" ) setWind( parseFloat( value ) );
       node.classList.toggle( "on", true );
     } );
   }
@@ -1066,9 +1027,6 @@ export function wireUI() {
     // a fingertip covers more glass than a cursor, so the pick has to be wider
     // or taps keep missing the stem they were aimed at
     hover.radius = TOUCH.tapRadius;
-
-    const moveReadout = document.getElementById( "move-readout" );
-    if ( moveReadout ) moveReadout.textContent = "thumb pad walks · drag to look · tap a plant";
 
     const pad = document.getElementById( "pad" );
     const knob = document.getElementById( "pad-knob" );
@@ -1441,14 +1399,6 @@ export function frame( now ) {
         ( state.paused ? " · paused" : "" ) +
         " · cut " + harvest.cut +
         " · buffer " + perf.buffer;
-    }
-    // the camera row reports where the walker actually got to, so the control
-    // is legible on the page rather than only feeling responsive
-    const readout = document.getElementById( "move-readout" );
-    if ( readout ) {
-      readout.textContent = state.walk
-        ? "walk " + cam.move.x.toFixed( 1 ) + " / " + cam.move.z.toFixed( 1 ) + " · heading " + THREE.MathUtils.radToDeg( camera.rotation.y ).toFixed( 0 ) + "deg"
-        : "framing held";
     }
   }
 }

@@ -41,43 +41,18 @@ body {
   user-select: none;
 }
 
-/* ---------------------------------------------------------------- title -- */
-.title {
-  position: fixed;
-  top: 22px;
-  left: 26px;
-  pointer-events: none;
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.55);
-}
-
-.wordmark {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 700;
-  letter-spacing: 0.42em;
-  text-transform: uppercase;
-  color: var(--ink);
-}
-
-.tagline {
-  margin: 6px 0 0;
-  font-family: Georgia, "Times New Roman", serif;
-  font-style: italic;
-  font-size: 15px;
-  letter-spacing: 0.04em;
-  color: var(--ink-dim);
-}
-
-/* --------------------------------------------------------------- panel -- */
+/* -------------------------------------------------------------- panel -- */
+/* the wordmark and tagline were removed, so the canvas carries the whole
+   first impression and nothing floats over the sky */
 .panel {
   position: fixed;
-  left: 22px;
-  bottom: 22px;
+  left: 14px;
+  bottom: 14px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 14px 16px;
-  border-radius: 10px;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
   background: var(--panel);
   border: 1px solid var(--panel-line);
   backdrop-filter: blur(6px) saturate(120%);
@@ -87,26 +62,26 @@ body {
 .row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .label {
-  font-size: 10px;
-  letter-spacing: 0.18em;
+  font-size: 9px;
+  letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--ink-dim);
-  margin-right: 4px;
+  margin-right: 3px;
 }
 
 button {
-  font-size: 11px;
-  letter-spacing: 0.08em;
+  font-size: 10px;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--ink-dim);
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid var(--panel-line);
-  border-radius: 5px;
-  padding: 6px 10px;
+  border-radius: 4px;
+  padding: 4px 8px;
   cursor: pointer;
 }
 
@@ -121,39 +96,9 @@ button.on {
   border-color: rgba(159, 192, 106, 0.5);
 }
 
-/* ----------------------------------------------------------------- wind -- */
-.track {
-  position: relative;
-  flex: 1 1 0;
-  min-width: 120px;
-  height: 8px;
-  border-radius: 4px;
-  background: linear-gradient(90deg, rgba(159, 192, 106, 0.16), rgba(159, 192, 106, 0.5));
-  border: 1px solid var(--panel-line);
-  cursor: ew-resize;
-  touch-action: none;
-}
-
-.handle {
-  position: absolute;
-  top: -5px;
-  left: 34%;
-  width: 14px;
-  height: 18px;
-  border-radius: 4px;
-  background: #dce8cf;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
-  pointer-events: none;
-}
-
-.readout {
-  font-family: Georgia, serif;
-  font-style: italic;
-  font-size: 12px;
-  color: var(--ink-dim);
-  margin-left: 10px;
-  white-space: nowrap;
-}
+/* the wind slider (.track / .handle) and the readout spans (.readout) no
+   longer exist: wind is Shift+Arrow, pause is Space, and the walk needs no
+   gate because nothing but the keys can move the camera now */
 
 /* --------------------------------------------------------------- stats -- */
 .stats {
@@ -184,33 +129,16 @@ button.on {
 
 /* ------------------------------------------------------- narrow screens -- */
 @media (max-width: 760px) {
-  .title {
-    top: 14px;
-    left: 16px;
-  }
-
-  .wordmark {
-    font-size: 12px;
-    letter-spacing: 0.3em;
-  }
-
-  .tagline {
-    font-size: 13px;
-  }
-
   .panel {
-    left: 12px;
-    right: 12px;
-    bottom: 12px;
-    gap: 8px;
+    left: 10px;
+    right: 10px;
+    bottom: 10px;
+    gap: 5px;
+    padding: 7px 9px;
   }
 
   .row {
     flex-wrap: wrap;
-  }
-
-  .track {
-    min-width: 90px;
   }
 
   .stats {
@@ -285,36 +213,27 @@ html.touch .rig {
 
 html.touch button {
   /* a fingertip is about 9mm across, so a control under 40px of tap target is
-     a coin flip; touch-action: manipulation also drops the double-tap zoom
-     delay that would otherwise swallow the second tap of a skill check */
-  min-height: 36px;
-  padding: 8px 12px;
+     a coin flip; the bar is smaller than it used to be but this stays the one
+     size a thumb can hit reliably, and touch-action: manipulation also drops
+     the double-tap zoom delay that would swallow a skill check's second tap */
+  min-height: 34px;
+  padding: 6px 10px;
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
 }
 
-html.touch .track {
-  height: 14px;
-}
-
-html.touch .track::after {
-  /* the visible track stays thin so it still reads as a slider, but the box
-     around it grows to a height a thumb can land on reliably */
-  content: "";
-  position: absolute;
-  inset: -13px -10px;
-}
-
 html.touch .panel {
   /* the bar spans the whole bottom edge rather than hugging the left: at a
-     phone width a narrow panel would wrap every row of buttons into a stack
-     three lines deep, which eats half the framing. Full width keeps each row
-     on one line, and app.js parks the thumb pad just above this bar */
-  left: 12px;
-  right: 12px;
-  bottom: 12px;
-  gap: 6px;
-  padding: 10px 12px;
+     phone width a narrow panel would wrap the light and view rows into a stack,
+     which eats the framing. Full width keeps each row on one line, and with the
+     camera, wind and playback rows gone the bar is two rows deep on a portrait
+     phone - three once .rig arrives - so the thumb pad has more glass under it
+     than it did before */
+  left: 10px;
+  right: 10px;
+  bottom: 10px;
+  gap: 5px;
+  padding: 7px 10px;
 }
 
 html.touch .stats {
@@ -327,8 +246,9 @@ html.touch .stats {
 @media (pointer: coarse, orientation: landscape) {
   html.touch button {
     /* a landscape phone is barely taller than the bar, so the tap targets
-       shrink to the smallest size a thumb still hits reliably */
-    min-height: 32px;
+       shrink to the smallest size a thumb still hits reliably. The bar is two
+       rows shorter than it used to be, which is what bought the room here */
+    min-height: 30px;
   }
 
   html.touch .rig {

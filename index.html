@@ -36,11 +36,6 @@
   <body>
     <canvas id="scene-canvas"></canvas>
 
-    <header class="title">
-      <h1 class="wordmark">VERDANT</h1>
-      <p class="tagline">A sea of green</p>
-    </header>
-
     <section id="panel" class="panel" aria-label="Field controls">
       <div class="row lights">
         <span class="label">Light</span>
@@ -55,34 +50,19 @@
         <button data-action="view" data-value="among">Among the rice</button>
       </div>
 
-      <div class="row camera">
-        <span class="label">Camera</span>
-        <button data-action="walk" data-value="on">Walk</button>
-        <button data-action="walk" data-value="off">Hold still</button>
-        <button data-action="walk" data-value="reset">Reset framing</button>
-        <span id="move-readout" class="readout">arrow keys / WASD walk · hold + drag to look</span>
-      </div>
-
       <div class="row rig">
         <span class="label">Elevate</span>
         <button class="hold" data-hold="1">Rise</button>
         <button class="hold" data-hold="-1">Lower</button>
       </div>
 
-      <div class="row wind">
-        <span class="label">Wind</span>
-        <div id="wind-track" class="track">
-          <div id="wind-handle" class="handle"></div>
-        </div>
-        <span id="wind-readout" class="readout">gentle breeze</span>
-      </div>
-
-      <div class="row playback">
-        <span class="label">Playback</span>
-        <button data-action="pause" data-value="true">Pause</button>
-        <button data-action="pause" data-value="false">Resume</button>
-      </div>
     </section>
+
+    <!--
+      Wind, pause and the walk have no buttons here any more, so they are
+      keyboard-only: Shift+Arrow nudges the wind, Space toggles pause, and the
+      arrow keys / WASD walk. The rig row stays because a phone has no E / Q.
+    -->
 
     <div id="pad" class="pad" aria-label="Walk pad">
       <div id="pad-knob" class="knob"></div>
