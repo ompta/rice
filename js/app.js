@@ -18,8 +18,9 @@
 //                 held drag (a flick on a phone) draws a line for a second
 //                 instead of turning the view, and every plant the line passes
 //                 over is cut at the stubble
-//   sound         golden hour loops the evening cicada and the skill check
-//                 answers itself: a great cut, an ordinary cut, a miss
+//   sound         the daylight hours loop the small bird, the golden hour loops
+//                 the evening cicada, and the skill check answers itself: a
+//                 great cut, an ordinary cut, a miss
 //
 // Nothing is loaded: every geometry and material here is procedural, so the
 // page's only dependency is three.js itself, which index.html's import map
@@ -27,7 +28,7 @@
 // injections in js/shaders.js are written against. Nothing is vendored here;
 // "npm install three@0.170.0" plus a one-line url swap is the offline fallback.
 import * as THREE from "three";
-import { buildPlantGeometry, mulberry32 } from "./plants.js";
+import { buildPlantGeometry, mulberry32, windOffset, REAP_SPINE } from "./plants.js";
 import {
   makeWindMaterial,
   makeGroundMaterial,
@@ -606,11 +607,14 @@ export function cutPlant( tier, index, share ) {
   }
   mesh.instanceMatrix.needsUpdate = true;
   mesh.userData.cut[ index ] = 1;
-  const hi = mesh.geometry.getAttribute( "aHi" );
-  if ( hi.array[ index ] !== 0 ) {
-    hi.array[ index ] = 0;
-    hi.needsUpdate = true;
-  }
+  // the head does not survive the blade: flag the instance so the rice material
+  // folds the panicle onto a point and the stubble left behind is culm and
+  // leaves rather than a whole plant shrunk to a seedling. The cut is bit 1 of
+  // the shared flag float, and a cut plant is never the picked one, so bit 0
+  // goes with it
+  const flags = mesh.geometry.getAttribute( "aFlags" );
+  flags.array[ index ] = 2;
+  flags.needsUpdate = true;
   // the slice: the severed part does not vanish, it goes into the air, wearing
   // the colour of the plant it came off
   const tint = mesh.geometry.getAttribute( "aTint" );
@@ -629,8 +633,9 @@ export function cutPlant( tier, index, share ) {
 // All of them share ONE InstancedMesh, so a cut costs no draw call and no
 // allocation: the slots live in a ring buffer, and a dead slot is parked at
 // zero scale, which collapses its four verts onto one point and rasterises
-// nothing. The pool is sized for a burst a second across the whole life of a
-// fragment - a few dozen slots - so the field never gets near it.
+// nothing. The pool is sized for a whole sickle swathe at the default burst
+// size - a swipe may take as many plants as still fit in it, which is what
+// SICKLE.max derives - so the field never gets near it either.
 //
 // Nothing is blended here either: the fragments are opaque bits of leaf, so they
 // take the depth test exactly like the rice does and the scene's "any order
@@ -643,7 +648,9 @@ export function cutPlant( tier, index, share ) {
 // ---------------------------------------------------------------------------
 export const CUT_FX = {
   perts: params.perts, // fragments a cut throws off; ?perts= overrides
-  pool: 96,            // slots the one draw call carries
+  pool: 192,           // slots the one draw call carries: sized so one sickle
+                       // swipe at the default burst size still fits whole (see
+                       // SICKLE.max, which derives from this)
   life: 1.5,           // seconds a fragment stays on screen
   fall: 4.2,           // m/s of gravity: a leaf is light, so it floats down
   drift: 0.9,          // m/s of wind push on a fragment, scaled by uWind
@@ -786,46 +793,52 @@ function verdictText( grade ) {
 }
 
 // ---------------------------------------------------------------------------
-// Sound. Four files, and none of them is fetched until it is asked for: an
+// Sound. Five files, and none of them is fetched until it is asked for: an
 // Audio element made with preload="none" costs nothing on the wire until play(),
-// so a field that never reaches golden hour and is never cut never moves a byte
-// over the network.
+// so a field that never reaches an hour's loop and is never cut never moves a
+// byte over the network.
 //
-// The hour owns one of them. higurashi (the evening cicada, whose cry is what
-// marks dusk over the paddies) loops for as long as the field is under the
-// golden preset - the page's sunset hour - and is stopped and rewound the moment
-// the hour leaves, so the next golden hour starts the cicada at the top of its
-// loop rather than at wherever the last one left it.
+// The hour owns two of them and they take turns over the day. samllbirdvoice
+// (the small bird, spelled as the file on disk is) calls through the daylight
+// hours - morning and afternoon - and higurashi (the evening cicada, whose cry
+// is what marks dusk over the paddies) takes over for as long as the field is
+// under the golden preset, the page's sunset hour. Whichever loop is running is
+// stopped and rewound the moment its hour leaves, so the hour that asks for a
+// file again starts it at the top of its loop rather than at wherever the last
+// one left it.
 //
 // The skill check owns the other three, and it answers itself: a great cut, an
 // ordinary cut (good and normal share one cue) and a miss.
 // ---------------------------------------------------------------------------
 export const SOUND = {
-  ambience: "higurashi.mp3",
+  bird: "samllbirdvoice.mp3", // the small bird's call
+  ambience: "higurashi.mp3", // the evening cicada
   great: "cutgreat.mp3",
   normal: "cutnormal.mp3",
   hurt: "hurt.mp3",
   golden: "golden", // the hour the cicada belongs to
+  birdHours: [ "morning", "afternoon" ], // the hours the small bird belongs to
   ambienceVolume: 0.55, // the loop sits under the field rather than over it
   effectVolume: 0.9,
 };
 
 export const sound = {
   volume: Math.min( 1, Math.max( 0, params.sound ) ), // ?sound=0 mutes the field
-  ambience: null, // the looping element while the golden hour holds
-  ambienceName: "",
+  ambience: null, // the looping element while the current hour's loop holds
+  ambienceName: "", // which loop file that element is, "" while nothing loops
   plays: [], // what the page chose to play, oldest first: { name, reason, at, stop }
   elements: {}, // file -> element, so a cue is fetched once and replayed from memory
 };
 
 // the element for a file, made on the first request and kept: replaying a cue
-// never re-requests the mp3
+// never re-requests the mp3. Both hour loops share the low ambience volume and
+// sit under the field; only the cues get the loud one
 function element( name ) {
   const held = sound.elements[ name ];
   if ( held ) return held;
   const a = new Audio( name );
   a.preload = "none";
-  a.volume = sound.volume * ( name === SOUND.ambience ? SOUND.ambienceVolume : SOUND.effectVolume );
+  a.volume = sound.volume * ( name === SOUND.ambience || name === SOUND.bird ? SOUND.ambienceVolume : SOUND.effectVolume );
   sound.elements[ name ] = a;
   return a;
 }
@@ -850,29 +863,42 @@ export function playSound( name, reason ) {
   logPlay( name, reason, false );
 }
 
-// the cicadas follow the hour rather than the pause: a paused field keeps its
-// light, so it keeps its insects
+// which file the hour is asking for: the small bird owns the daylight hours and
+// the cicada owns the golden one, so the field always has one voice over it
+// rather than a silence between the cues
+function loopFor( hour ) {
+  if ( hour === SOUND.golden ) return SOUND.ambience;
+  if ( SOUND.birdHours.indexOf( hour ) >= 0 ) return SOUND.bird;
+  return "";
+}
+
+// the loops follow the hour rather than the pause: a paused field keeps its
+// light, so it keeps its bird and its insects
 export function ambience() {
-  if ( state.light === SOUND.golden ) {
-    if ( sound.ambience || sound.volume <= 0 ) return;
-    const a = element( SOUND.ambience );
-    a.loop = true;
-    a.currentTime = 0;
-    a.play().catch( () => {} );
-    sound.ambience = a;
-    sound.ambienceName = SOUND.ambience;
-    logPlay( SOUND.ambience, "golden hour", false );
-    return;
+  const want = loopFor( state.light );
+  // the hour already owns the loop it wants, so there is nothing to swap - and
+  // a bird that carries on from morning into afternoon never restarts mid-call
+  if ( want === sound.ambienceName ) return;
+  if ( sound.ambience ) {
+    const left = sound.ambienceName;
+    sound.ambience.pause();
+    // rewind so the hour that asks for this file again starts it at the top of
+    // its loop rather than from wherever this hour left it
+    sound.ambience.currentTime = 0;
+    sound.ambience = null;
+    sound.ambienceName = "";
+    logPlay( left, "left the hour", true );
   }
-  if ( !sound.ambience ) return;
-  const left = sound.ambienceName;
-  sound.ambience.pause();
-  // rewind so the next golden hour starts the cicada from the top of the loop
-  // rather than from wherever the last one left it
-  sound.ambience.currentTime = 0;
-  sound.ambience = null;
-  sound.ambienceName = "";
-  logPlay( left, "left golden hour", true );
+  // a muted page never makes an element at all, and an hour with no loop of its
+  // own never asks for one
+  if ( !want || sound.volume <= 0 ) return;
+  const a = element( want );
+  a.loop = true;
+  a.currentTime = 0;
+  a.play().catch( () => {} );
+  sound.ambience = a;
+  sound.ambienceName = want;
+  logPlay( want, state.light, false );
 }
 
 // The pool is built once, with every slot parked at zero scale: four verts on
@@ -1048,11 +1074,13 @@ export const SICKLE = {
   stub: 0.14, // stubble a sickle leaves, as a share of the plant's height
   vary: 0.06, // how much that stubble wanders along one swathe
   swish: 8, // plants one swipe has to clear to earn the great cue
-  // plants one swipe may take at most. It is pinned to the fragment pool: a cut
-  // throws CUT_FX.perts fragments and the pool is the one draw call's slots, so
-  // at this number a whole swathe's bursts still fit without recycling a live
-  // slot - a flick cannot mow the field, and it cannot spend the fx pool either
-  max: 18,
+  // plants one swipe may take at most. It is pinned to the fragment pool rather
+  // than to a taste: a cut throws CUT_FX.perts fragments and the pool is the one
+  // draw call's slots, so this is exactly the swathe whose bursts still fit
+  // without recycling a live slot - a flick cannot mow the field, and it cannot
+  // spend the fx pool either. Deriving it is what keeps the cap honest when
+  // ?perts= moves the burst size
+  max: Math.max( 6, Math.floor( CUT_FX.pool / Math.max( 1, CUT_FX.perts ) ) ),
   // where the item sits in the frame: right of centre, below the horizon,
   // about arm's length from the eye - all camera-space metres
   hx: 0.3,
@@ -1239,56 +1267,158 @@ function reapSickle( x0, y0, x1, y1 ) {
   reapSickleOn( x0, y0, x1, y1, r.width, r.height );
 }
 
+// squared distance from a point to a segment: the band is a screen distance, so
+// both the stem and the drawn line are walked in canvas px
+function pointSegD2( px, py, ax, ay, bx, by ) {
+  const vx = bx - ax;
+  const vy = by - ay;
+  const l2 = vx * vx + vy * vy;
+  if ( l2 <= 1e-9 ) return ( px - ax ) * ( px - ax ) + ( py - ay ) * ( py - ay );
+  let u = ( ( px - ax ) * vx + ( py - ay ) * vy ) / l2;
+  if ( u < 0 ) return ( px - ax ) * ( px - ax ) + ( py - ay ) * ( py - ay );
+  if ( u > 1 ) return ( px - bx ) * ( px - bx ) + ( py - by ) * ( py - by );
+  const qx = ax + vx * u - px;
+  const qy = ay + vy * u - py;
+  return qx * qx + qy * qy;
+}
+
+// does the drawn segment pass within band of the whole stem: the blade went
+// clean through it, or the closest the two segments come to each other is inside
+// the band. For two segments that do not cross, that closest approach is always
+// one of the four endpoint-to-segment gaps, so four of them settle the question
+// exactly - a stem near the camera is 300 px tall on the glass, and a sampler
+// that only rings it at a few heights leaves the middle of the stem untested
+function stemInBand( ax, ay, bx, by, cx, cy, dx, dy, band2 ) {
+  const abx = bx - ax;
+  const aby = by - ay;
+  const cdx = dx - cx;
+  const cdy = dy - cy;
+  const o1 = abx * ( cy - ay ) - aby * ( cx - ax );
+  const o2 = abx * ( dy - ay ) - aby * ( dx - ax );
+  const o3 = cdx * ( ay - cy ) - cdy * ( ax - cx );
+  const o4 = cdx * ( by - cy ) - cdy * ( bx - cx );
+  if ( o1 * o2 < 0 && o3 * o4 < 0 ) return true; // the blade crossed the stem
+  if ( pointSegD2( ax, ay, cx, cy, dx, dy ) <= band2 ) return true;
+  if ( pointSegD2( bx, by, cx, cy, dx, dy ) <= band2 ) return true;
+  if ( pointSegD2( cx, cy, ax, ay, bx, by ) <= band2 ) return true;
+  return pointSegD2( dx, dy, ax, ay, bx, by ) <= band2;
+}
+
+// The plant the player sees is not the straight column the instance matrix
+// describes. Two things move it: the culm's own curve (plants.js bends the
+// spine rather than drawing a rod) and the wind, which the vertex shader adds
+// in world space after the instance matrix (PROJECT_WIND). At a stiff breeze a
+// plant stands up to 0.15 m off its own column - 18 px of glass at arm's length,
+// and more the closer the eye gets - so a blade aimed at the column misses a
+// plant the player aimed at, which is what left plants standing under a drawn
+// line. The reap therefore walks the same spine the geometry draws, pushed by
+// the same wind term the shader applies for this frame; the spine itself lives
+// in plants.js next to the numbers the geometry is built from, so the two
+// cannot drift apart.
+//
+// Scratch for the spine's four points, reused across plants and across the
+// reap's per-pointer-move calls so the walk allocates nothing.
+const REAP_WIND = [ 0, 0, 0 ];
+const REAP_PX = [ 0, 0, 0, 0 ];
+const REAP_PY = [ 0, 0, 0, 0 ];
+
+// One plant's drawn spine, in canvas px: the same spine the reap walks and the
+// hover picks on, so what the eye calls "on the line" and what the blade takes
+// are the same numbers rather than two guesses at a plant that leans. Fills px
+// / py and returns how many of the spine's points landed in front of the eye.
+function spineToScreen( e, m, o, wind, k4, zs, w, h, px, py ) {
+  const x = m[ o + 12 ], y = m[ o + 13 ], z = m[ o + 14 ];
+  const axx = m[ o ], axy = m[ o + 1 ], axz = m[ o + 2 ];
+  const aux = m[ o + 4 ], auy = m[ o + 5 ], auz = m[ o + 6 ];
+  const azx = m[ o + 8 ], azy = m[ o + 9 ], azz = m[ o + 10 ];
+  const w0 = wind[ k4 ], w1 = wind[ k4 + 1 ], w2 = wind[ k4 + 2 ], w3 = wind[ k4 + 3 ];
+  let n = 0;
+  for ( let s = 0; s < REAP_SPINE.length; s += 6 ) {
+    windOffset( w0, w1, w2, w3, zs, REAP_SPINE[ s + 3 ], REAP_SPINE[ s + 4 ], REAP_SPINE[ s + 5 ], REAP_WIND );
+    const k = REAP_SPINE[ s ];
+    const lx = REAP_SPINE[ s + 1 ], lz = REAP_SPINE[ s + 2 ];
+    const wx = x + axx * lx + aux * k + azx * lz + REAP_WIND[ 0 ];
+    const wy = y + axy * lx + auy * k + azy * lz + REAP_WIND[ 1 ];
+    const wz = z + axz * lx + auz * k + azz * lz + REAP_WIND[ 2 ];
+    const cw = e[ 3 ] * wx + e[ 7 ] * wy + e[ 11 ] * wz + e[ 15 ];
+    if ( cw <= 0.05 ) continue; // this point of the stem is behind the eye
+    px[ n ] = ( ( e[ 0 ] * wx + e[ 4 ] * wy + e[ 8 ] * wz + e[ 12 ] ) / cw * 0.5 + 0.5 ) * w;
+    py[ n ] = ( 0.5 - ( e[ 1 ] * wx + e[ 5 ] * wy + e[ 9 ] * wz + e[ 13 ] ) / cw * 0.5 ) * h;
+    n++;
+  }
+  return n;
+}
+
+// how far a plant's drawn stem can land from the screen column its root sits
+// on, in px. A plant fits in a sphere of `reach` metres around its root, and the
+// rows of the camera product say how much a metre of world is worth on the glass
+// at this depth: the sideways row gives the offset itself, the depth row gives it
+// scaled by the root's own place on the glass, since a point nearer the eye
+// spreads wider over it. Deliberately generous - it only ever rules out plants
+// the blade could not have reached, which is what keeps a pointer move over
+// twelve thousand plants cheap.
+function rootDrift( e, r1, r3, rw, ndcx, reach, w ) {
+  const near = rw - reach * r3;
+  if ( near <= 0.05 ) return 1e9; // close enough to the eye that nothing is ruled out
+  return 0.5 * w * reach * ( r1 + r3 * Math.abs( ndcx ) ) / near;
+}
+
 function reapSickleOn( x0, y0, x1, y1, w, h ) {
   const band = sickle.band;
   reapMatrix.copy( camera.projectionMatrix ).multiply( camera.matrixWorldInverse );
   const e = reapMatrix.elements;
-  const dx = x1 - x0;
-  const dy = y1 - y0;
-  const dl2 = dx * dx + dy * dy;
   const band2 = band * band;
   const minX = Math.min( x0, x1 ) - band;
   const maxX = Math.max( x0, x1 ) + band;
   const minY = Math.min( y0, y1 ) - band;
   const maxY = Math.max( y0, y1 ) + band;
+  // the rows of the same product, as lengths per metre of world: clip x grows
+  // by r1 per metre sideways, clip w by r3 per metre of depth. A plant fits in a
+  // sphere around its own root, so those two numbers bound how far its drawn
+  // stem can land from the screen column its root sits on - which is what keeps
+  // the walk over the whole stand cheap without ever ruling out a plant the
+  // blade could actually have reached.
+  const r1 = Math.hypot( e[ 0 ], e[ 4 ], e[ 8 ] );
+  const r3 = Math.hypot( e[ 3 ], e[ 7 ], e[ 11 ] );
   for ( let t = 0; t < field.tiers.length; t++ ) {
     const mesh = field.tiers[ t ];
     const m = mesh.instanceMatrix.array;
     const cut = mesh.userData.cut;
+    const wind = mesh.geometry.attributes.aWind.array;
+    const sway = mesh.geometry.attributes.aWindZ.array;
     for ( let i = 0; i < mesh.count; i++ ) {
       if ( sickle.cut.length >= SICKLE.max ) return; // one flick cannot mow the field
       if ( cut[ i ] ) continue; // already stubble: nothing to take
       const o = i * 16;
       const x = m[ o + 12 ];
+      const y = m[ o + 13 ];
       const z = m[ o + 14 ];
-      const rw = e[ 3 ] * x + e[ 11 ] * z + e[ 15 ];
-      if ( rw <= 0 ) continue; // root behind the camera
-      const rx = ( ( e[ 0 ] * x + e[ 8 ] * z + e[ 12 ] ) / rw * 0.5 + 0.5 ) * w;
-      if ( rx < minX - 1 ) continue; // the stem is a vertical screen line: the
-      if ( rx > maxX + 1 ) continue; // column alone rules most of the field out
-      const hy = Math.hypot( m[ o + 1 ], m[ o + 5 ], m[ o + 9 ] );
-      const tw = e[ 3 ] * x + e[ 7 ] * hy + e[ 11 ] * z + e[ 15 ];
-      if ( tw <= 0 ) continue; // tip behind the camera
-      const ry = ( 0.5 - ( e[ 1 ] * x + e[ 9 ] * z + e[ 13 ] ) / rw * 0.5 ) * h;
-      const tx = ( ( e[ 0 ] * x + e[ 4 ] * hy + e[ 8 ] * z + e[ 12 ] ) / tw * 0.5 + 0.5 ) * w;
-      const ty = ( 0.5 - ( e[ 1 ] * x + e[ 5 ] * hy + e[ 9 ] * z + e[ 13 ] ) / tw * 0.5 ) * h;
-      if ( Math.min( ry, ty ) > maxY ) continue;
-      if ( Math.max( ry, ty ) < minY ) continue;
-      if ( Math.min( rx, tx ) > maxX ) continue;
-      if ( Math.max( rx, tx ) < minX ) continue;
-      // three rings down the stem - root, belly, tip - are enough to say the
-      // stem crossed the line: a stem is a short segment, not a curve
+      const rw = e[ 3 ] * x + e[ 7 ] * y + e[ 11 ] * z + e[ 15 ];
+      if ( rw <= 0.05 ) continue; // the plant's base is behind the camera
+      const k4 = i * 4;
+      // the plant's own height is the length of its up column, and the sphere
+      // that holds the whole plant is that height plus the culm's lean plus the
+      // wind the shader is pushing it by this frame
+      const hy = Math.hypot( m[ o + 4 ], m[ o + 5 ], m[ o + 9 ] );
+      const ndcx = ( e[ 0 ] * x + e[ 4 ] * y + e[ 8 ] * z + e[ 12 ] ) / rw;
+      const drift = rootDrift( e, r1, r3, rw, ndcx, hy + 0.09 + 1.7 * Math.abs( wind[ k4 + 3 ] ), w );
+      const rx = ( ndcx * 0.5 + 0.5 ) * w;
+      if ( rx < minX - drift ) continue;
+      if ( rx > maxX + drift ) continue;
+      // the spine as the shader draws it, in canvas px
+      const n = spineToScreen( e, m, o, wind, k4, sway[ i ], w, h, REAP_PX, REAP_PY );
+      if ( n < 2 ) continue; // too little of it is in front of the eye to cut
+      let lox = 1e9, hix = -1e9, loy = 1e9, hiy = -1e9;
+      for ( let j = 0; j < n; j++ ) {
+        if ( REAP_PX[ j ] < lox ) lox = REAP_PX[ j ];
+        if ( REAP_PX[ j ] > hix ) hix = REAP_PX[ j ];
+        if ( REAP_PY[ j ] < loy ) loy = REAP_PY[ j ];
+        if ( REAP_PY[ j ] > hiy ) hiy = REAP_PY[ j ];
+      }
+      if ( lox > maxX || hix < minX || loy > maxY || hiy < minY ) continue;
       let hit = false;
-      for ( let s = 0; s < 3; s++ ) {
-        const k = 0.15 + s * 0.4;
-        const px = rx + ( tx - rx ) * k;
-        const py = ry + ( ty - ry ) * k;
-        let u = dl2 > 1e-6 ? ( ( px - x0 ) * dx + ( py - y0 ) * dy ) / dl2 : 0;
-        if ( u < 0 ) u = 0;
-        else if ( u > 1 ) u = 1;
-        const qx = x0 + dx * u - px;
-        const qy = y0 + dy * u - py;
-        if ( qx * qx + qy * qy <= band2 ) {
+      for ( let j = 1; j < n; j++ ) {
+        if ( stemInBand( REAP_PX[ j - 1 ], REAP_PY[ j - 1 ], REAP_PX[ j ], REAP_PY[ j ], x0, y0, x1, y1, band2 ) ) {
           hit = true;
           break;
         }
@@ -1456,10 +1586,14 @@ export function buildField() {
     }
     geo.setAttribute( "aSeed", new THREE.InstancedBufferAttribute( seeds, 1 ) );
     geo.setAttribute( "aTint", new THREE.InstancedBufferAttribute( tints, 3 ) );
-    // 0 for every plant until the pointer picks one; the pick rewrites this
-    // one float per hover change and the rice material turns it into a bright
-    // leaf edge, so the highlight costs no extra draw call
-    geo.setAttribute( "aHi", new THREE.InstancedBufferAttribute( new Float32Array( count ), 1 ) );
+    // Two flags share one instanced float rather than taking two slots: the
+    // plant already asks the shader for every attribute the field's GL
+    // context allows, and one more declaration makes the program fail to link
+    // (three then says "Too many attributes" and the whole stand stops
+    // drawing). Bit 0 is the hover outline and bit 1 is the cut, so the pick
+    // rewrites one float per hover change and the rice material turns it into
+    // a bright leaf edge - and folds the head - at no extra draw call.
+    geo.setAttribute( "aFlags", new THREE.InstancedBufferAttribute( new Float32Array( count ), 1 ) );
     // the wave train, refilled once per plant per frame by updateWind: four
     // floats of summed wave + amplitude and one of sideways sway per plant,
     // instead of six trig calls per plant vertex in the shader
@@ -1983,7 +2117,7 @@ export function wireUI() {
   // once each and the cursor distance to that short segment decides the pick.
   // That is a few thousand multiply adds per pointer move, and it never needs
   // a ray/triangle test against three thousand plants. The winner is flagged
-  // in the aHi instanced attribute, which the patched rice material turns into
+  // in the aFlags instanced attribute, which the patched rice material turns into
   // a bright leaf edge. The pick is independent of the camera controls and of
   // "Hold still", so a paused or held view can still be inspected.
   // ---------------------------------------------------------------------------
@@ -1992,24 +2126,25 @@ export function wireUI() {
   function setHover( tier, index, height ) {
     if ( hover.tier === tier && hover.index === index ) return;
     if ( hover.tier >= 0 ) {
-      const prev = field.tiers[ hover.tier ].geometry.getAttribute( "aHi" );
-      prev.array[ hover.index ] = 0;
+      const prev = field.tiers[ hover.tier ].geometry.getAttribute( "aFlags" );
+      // drop the outline bit only: a plant the blade took keeps its cut bit
+      prev.array[ hover.index ] &= ~1;
       prev.needsUpdate = true;
     }
     hover.tier = tier;
     hover.index = index;
     hover.height = height;
     if ( tier >= 0 && index >= 0 ) {
-      const attr = field.tiers[ tier ].geometry.getAttribute( "aHi" );
-      attr.array[ index ] = 1;
+      const attr = field.tiers[ tier ].geometry.getAttribute( "aFlags" );
+      attr.array[ index ] |= 1;
       attr.needsUpdate = true;
     }
     // a live check keeps its own plant lit even when the cursor wanders off it,
     // so the plant the meter is about is the plant the outline is on
     if ( skill.active && skill.tier >= 0 ) {
-      const held = field.tiers[ skill.tier ].geometry.getAttribute( "aHi" );
-      if ( held.array[ skill.index ] === 0 ) {
-        held.array[ skill.index ] = 1;
+      const held = field.tiers[ skill.tier ].geometry.getAttribute( "aFlags" );
+      if ( ( held.array[ skill.index ] & 1 ) === 0 ) {
+        held.array[ skill.index ] |= 1;
         held.needsUpdate = true;
       }
     }
@@ -2022,6 +2157,8 @@ export function wireUI() {
     const e = pickMatrix.elements;
     const ex = camera.position.x;
     const ez = camera.position.z;
+    const r1 = Math.hypot( e[ 0 ], e[ 4 ], e[ 8 ] );
+    const r3 = Math.hypot( e[ 3 ], e[ 7 ], e[ 11 ] );
     let bestTier = -1;
     let bestIndex = -1;
     let bestHeight = 0;
@@ -2030,38 +2167,40 @@ export function wireUI() {
       const mesh = field.tiers[ t ];
       const m = mesh.instanceMatrix.array;
       const cut = mesh.userData.cut;
+      const wind = mesh.geometry.attributes.aWind.array;
+      const sway = mesh.geometry.attributes.aWindZ.array;
       for ( let i = 0; i < mesh.count; i++ ) {
         const o = i * 16;
         if ( cut[ i ] ) continue; // a cut plant is stubble: nothing to point at
         const x = m[ o + 12 ];
+        const y = m[ o + 13 ];
         const z = m[ o + 14 ];
-        const hy = Math.hypot( m[ o + 1 ], m[ o + 5 ], m[ o + 9 ] );
-        const rw = e[ 3 ] * x + e[ 11 ] * z + e[ 15 ];
-        if ( rw <= 0 ) continue; // root behind the camera
-        const rx = ( ( e[ 0 ] * x + e[ 8 ] * z + e[ 12 ] ) / rw * 0.5 + 0.5 ) * w;
-        // cheap reject first: the camera never rolls, so a stem (and the
-        // vertical segment we score it on) projects to a vertical screen
-        // line, which means the column alone can rule a plant out. Most of
-        // the field is somewhere else on the screen, and at high quality the
-        // field is ~12k instances, so this is what keeps a pointer move cheap
-        const across = rx - cx;
-        if ( across > best + 1 || across < -( best + 1 ) ) continue;
-        const tw = e[ 3 ] * x + e[ 7 ] * hy + e[ 11 ] * z + e[ 15 ];
-        if ( tw <= 0 ) continue; // tip behind the camera
-        const ry = ( 0.5 - ( e[ 1 ] * x + e[ 9 ] * z + e[ 13 ] ) / rw * 0.5 ) * h;
-        const tx = ( ( e[ 0 ] * x + e[ 4 ] * hy + e[ 8 ] * z + e[ 12 ] ) / tw * 0.5 + 0.5 ) * w;
-        const ty = ( 0.5 - ( e[ 1 ] * x + e[ 5 ] * hy + e[ 9 ] * z + e[ 13 ] ) / tw * 0.5 ) * h;
-        const sx = tx - rx;
-        const sy = ty - ry;
-        const l2 = sx * sx + sy * sy;
-        let k = l2 > 1e-6 ? ( ( cx - rx ) * sx + ( cy - ry ) * sy ) / l2 : 0;
-        if ( k < 0 ) k = 0;
-        else if ( k > 1 ) k = 1;
-        const qx = rx + sx * k - cx;
-        const qy = ry + sy * k - cy;
+        const rw = e[ 3 ] * x + e[ 7 ] * y + e[ 11 ] * z + e[ 15 ];
+        if ( rw <= 0.05 ) continue; // root behind the camera
+        const k4 = i * 4;
+        const hy = Math.hypot( m[ o + 4 ], m[ o + 5 ], m[ o + 9 ] );
+        const ndcx = ( e[ 0 ] * x + e[ 4 ] * y + e[ 8 ] * z + e[ 12 ] ) / rw;
+        // cheap reject first: the drawn stem can only be so far from the screen
+        // column its root sits on, so a plant whose column is elsewhere on the
+        // glass never needs its spine projected at all. Most of the field is
+        // somewhere else, and at high quality the stand is ~12k instances, so
+        // this is what keeps a pointer move cheap.
+        const across = rootDrift( e, r1, r3, rw, ndcx, hy + 0.09 + 1.7 * Math.abs( wind[ k4 + 3 ] ), w );
+        const rx = ( ndcx * 0.5 + 0.5 ) * w;
+        if ( rx - across > cx + best ) continue;
+        if ( rx + across < cx - best ) continue;
+        // the same spine the reap walks, so the outlined plant is the plant the
+        // blade will actually take rather than the one its root stands under
+        const n = spineToScreen( e, m, o, wind, k4, sway[ i ], w, h, REAP_PX, REAP_PY );
+        if ( n < 2 ) continue;
+        let d2 = 1e18;
+        for ( let j = 1; j < n; j++ ) {
+          const dd = pointSegD2( cx, cy, REAP_PX[ j - 1 ], REAP_PY[ j - 1 ], REAP_PX[ j ], REAP_PY[ j ] );
+          if ( dd < d2 ) d2 = dd;
+        }
         // a slight bias toward nearer plants stops a plant far behind another
         // from winning when both sit under the cursor
-        const d = Math.hypot( qx, qy ) + Math.hypot( x - ex, z - ez ) * 0.02;
+        const d = Math.sqrt( d2 ) + Math.hypot( x - ex, z - ez ) * 0.02;
         if ( d < best ) {
           best = d;
           bestTier = t;
@@ -2220,9 +2359,9 @@ export function frame( now ) {
     // capped step so a minute stays a minute
     cycleLight( raw );
   }
-  // the cicadas follow the hour rather than the pause: a paused field keeps its
-  // light, so it keeps its insects - pause holds the picture, not the field's
-  // own sounds
+  // the loops follow the hour rather than the pause: a paused field keeps its
+  // light, so it keeps its bird and its insects - pause holds the picture, not
+  // the field's own sounds
   ambience();
   easeRig( dt );
   applyRig();

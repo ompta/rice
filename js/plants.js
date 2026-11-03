@@ -19,6 +19,48 @@
 //   aTone  0 at the base, 1 at the tip          -> colour ramp
 //   aPart  0 for foliage, 1 for the rice head   -> green to straw
 //   aEdge  0 on one side of a ribbon, 1 on the other -> leaf outline (hover)
+//
+// The reap has to know the shape a plant is, too: the plant the player sees is
+// this spine rather than the straight column the instance matrix describes, and
+// the wind pushes it further still, so the numbers the reaping walks live here
+// next to the numbers the geometry is built from and cannot drift apart.
+export const CULM_BEND_X = 0.055;
+export const CULM_BEND_Z = 0.024;
+export function culmLean( h ) {
+  return h * h * ( 0.86 + 0.22 * Math.sin( h * 2.1 ) );
+}
+
+// verdantWind() on the CPU, for one point of a plant's spine. The vertex shader
+// adds this offset in WORLD space, after the instance matrix (PROJECT_WIND), so
+// at a stiff breeze a plant stands up to 0.15 m off its own column - 18 px of
+// glass at arm's length, more the closer the eye gets. A reap that measured the
+// column instead of the drawn plant missed plants the player had aimed at.
+// w0..w3 are that plant's per-frame aWind, z its aWindZ, flex that point's aFlex
+// and sn / cs its baked aWave; the result comes back in out.
+export function windOffset( w0, w1, w2, w3, z, flex, sn, cs, out ) {
+  const wave = w0 + w1 * cs + w2 * sn;
+  const amp = w3 * flex;
+  const push = wave * amp;
+  out[ 0 ] = 0.96782 * push;
+  out[ 1 ] = amp * ( 0.09 * Math.min( wave, 0.0 ) - 0.40 * Math.max( wave, 0.0 ) );
+  out[ 2 ] = 0.25163 * push + amp * 0.16 * z;
+}
+
+// The spine the reap walks, in the unit plant's own space: four samples, each
+// with the flex and the flutter phase the shader applies at that height. Four
+// is enough because the culm's curve is a handful of px of glass even on the
+// closest plant and every link between samples is tested as a whole segment.
+// Six numbers per sample: height, lean in x, lean in z, flex, sin, cos.
+export const REAP_SPINE = (() => {
+  const out = [];
+  for ( const k of [ 0, 0.34, 0.67, 1 ] ) {
+    const lean = culmLean( k );
+    const pv = ( 0.4 + 0.6 * k ) * 3.7; // the ribbon's own +side phase
+    out.push( k, CULM_BEND_X * lean, CULM_BEND_Z * lean, Math.pow( k, 1.45 ), Math.sin( pv ), Math.cos( pv ) );
+  }
+  return out;
+} )();
+
 export function buildPlantGeometry(detail) {
   const pos = [];
   const nor = [];
@@ -89,11 +131,11 @@ export function buildPlantGeometry(detail) {
 
   // ---- culm: a spine that leans and kinks, never a straight line
   const rings = detail === "near" ? 8 : detail === "mid" ? 5 : 4;
-  const bendX = 0.055, bendZ = 0.024;
+  const bendX = CULM_BEND_X, bendZ = CULM_BEND_Z;
   const spine = [];
   for ( let i = 0; i < rings; i++ ) {
     const h = i / ( rings - 1 );
-    const lean = h * h * ( 0.86 + 0.22 * Math.sin( h * 2.1 ) );
+    const lean = culmLean( h );
     spine.push( [ bendX * lean, h * H, bendZ * lean ] );
   }
   const upDirs = [ [ 1, 0, 0 ], [ 0, 0, 1 ], [ -1, 0, 0 ], [ 0, 0, -1 ] ];

@@ -193,6 +193,30 @@ mvPosition = viewMatrix * mvPosition;
 gl_Position = projectionMatrix * mvPosition;
 `;
 
+// ---------------------------------------------------------------------------
+// The cut. A plant the blade has taken is shrunk toward the ground by its own
+// instance matrix, which is honest for the culm and the leaves but not for the
+// rice: a shrunken plant would still wear a shrunken ear, and a stubble with a
+// head on it reads as a seedling rather than as what a reaping leaves behind.
+//
+// aPart is 1 on exactly the panicle - the rachis, the kernels and the awns -
+// and 0 on the culm and the leaves, and every ribbon is one or the other end to
+// end, so no triangle straddles the fold. The cut bit of aFlags is 2 per
+// instance, written by cutPlant - the plant already asks the shader for
+// every attribute slot the field's GL context allows, so the outline and the
+// cut share one instanced float rather than taking two: a 14th declaration
+// makes the program fail to link and the whole stand stops drawing. Folding
+// every head vertex onto one point gives every triangle of the head zero area,
+// so the rasteriser never produces a fragment for it: no
+// extra geometry, no second mesh, no draw call, and the severed part the page
+// throws into the air is a separate object that keeps its ears.
+// ---------------------------------------------------------------------------
+export const CUT_HIDE = `
+if ( aFlags > 1.5 && aPart > 0.5 ) {
+  transformed = vec3( 0.0, 1.0, 0.0 ); // the culm tip: the head collapses onto it
+}
+`;
+
 // Per-vertex colour ramp: cool and dark at the base, warmer and brighter at
 // the tip. The ears are ripe gold rather than the olive the plant's own green
 // tint would leave them in, so aPart also fades that tint out at the head.
@@ -217,7 +241,8 @@ diffuseColor.rgb *= vTint * vShade;
 // is deliberately generous: the picked plant has to read at a glance against
 // a moving sea of green, not be hunted for. The band's inner edge is a short
 // step rather than a long gradient, so a wide band still looks like an edge
-// instead of a wash over the whole leaf. aHi is 0 or 1 per instance and is
+// instead of a wash over the whole leaf. The outline bit of aFlags is 0 or 1
+// per instance and is
 // rewritten on the CPU when the pointer moves, so the highlight rides along
 // with the wind for free - same vertex shader, same bend, no second pass over
 // the field.
@@ -228,7 +253,7 @@ diffuseColor.rgb *= vTint * vShade;
 // ---------------------------------------------------------------------------
 export const HI_VERTEX = `
 vEdge = aEdge;
-vHi = aHi;
+vHi = mod( aFlags, 2.0 );   // the outline bit; the cut bit rides the same float
 `;
 
 export const HI_FRAGMENT = `
@@ -385,13 +410,16 @@ export function makeWindMaterial(uniforms, opts) {
 
     shader.vertexShader =
       WIND_GLSL +
-      "\nvarying vec3 vTint;\nvarying float vShade;\nvarying float vEdge;\nvarying float vHi;\nattribute float aEdge;\nattribute float aHi;\n" +
+      "\nvarying vec3 vTint;\nvarying float vShade;\nvarying float vEdge;\nvarying float vHi;\nattribute float aEdge;\nattribute float aFlags;\n" +
       shader.vertexShader;
 
     shader.vertexShader = shader.vertexShader
       .replace(
         "#include <begin_vertex>",
-        "#include <begin_vertex>\n" + HI_VERTEX
+        // the fold happens here, before the custom projection below reads
+        // `transformed`, so a cut plant's head is already gone when the wind
+        // offset and the instance matrix are applied to it
+        "#include <begin_vertex>\n" + CUT_HIDE + HI_VERTEX
       )
       .replace(
         "#include <beginnormal_vertex>",
