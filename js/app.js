@@ -1,11 +1,18 @@
 // js/app.js — VERDANT. A sea of green.
 //
 // Layout of the whole experience:
-//   sky dome      raw shader, gradient + cloud + sun bloom
-//   hills         three unlit silhouette bands, atmospheric perspective
+//   sky dome      raw shader: scattering gradient that rides the sun's height,
+//                 fbm cloud with a lit rim, sun disc + bloom, and horizon haze
+//                 in the fog's own colour so the hills dissolve into it
+//   hills         three unlit silhouette bands, terraced and hazier the further
+//                 they are, with one far peak sitting behind the field
 //   tree line     instanced trunks + canopies, irregular spacing
-//   far field     one ring plane, coloured by the same wave train as the rice
-//   ground        lit paddy floor under the rice, procedural
+//   far field     one ring plane on the same plot lattice as the floor: a
+//                 patchwork of green, ripe and open-water plots, the near ones
+//                 riding the same wave train as the rice
+//   ground        lit paddy floor under the rice: each plot at its own level,
+//                 modelled bunds merged into the same mesh, and a shallow
+//                 water film mirroring the sky it is standing under
 //   rice          three InstancedMesh tiers (near / mid / far), GPU wind, and
 //                 one plant shared by all of them - the lush foreground one,
 //                 its drooping head hung with ripe gold ears
@@ -172,22 +179,22 @@ function makePreset( sun, sky, ground, fog, extra ) {
 
 export const PRESETS = {
   morning: makePreset(
-    [ -0.58, 0.34, -0.52, "#e6ecf2", 1.55, 0.7, 0.25, 0.6, "#9db4c8", 0.55 ],
-    [ "#b8c9dd", "#7e97b4", "#a9bccd", "#d3dbe2", 0.62 ],
-    [ "#465236", 0.95 ],
-    [ "#c4d0dc", 0.0074, "#5f7d52", "#8ba39a", 1.02 ]
+    [ -0.62, 0.20, -0.55, "#f4e6d2", 1.42, 0.72, 0.28, 0.55, "#9db4c8", 0.60 ],
+    [ "#c6d6e6", "#6889ad", "#a7c0d6", "#e2e6e2", 0.66 ],
+    [ "#3e4a2e", 0.92 ],
+    [ "#cdd6de", 0.0092, "#4e6a42", "#83948a", 1.0 ]
   ),
   afternoon: makePreset(
-    [ 0.22, 0.86, -0.36, "#f4f2ea", 1.95, -0.6, 0.3, 0.55, "#aebccf", 0.62 ],
-    [ "#a6bfd6", "#7e9cb8", "#c2cdd6", 0.5 ],
-    [ "#4d5a38", 1.05 ],
-    [ "#c8d2d9", 0.0066, "#5f7f4c", "#93a68e", 1.0 ]
+    [ 0.18, 0.90, -0.30, "#fbf7ec", 2.0, -0.62, 0.34, 0.52, "#b6c6da", 0.66 ],
+    [ "#b8cde2", "#4f7bb0", "#93b6d0", "#e0e7ea", 0.46 ],
+    [ "#465236", 1.05 ],
+    [ "#d6dee5", 0.0062, "#547a44", "#8fa48e", 0.98 ]
   ),
   golden: makePreset(
-    [ 0.88, 0.17, 0.34, "#ffd9a2", 2.35, -0.7, 0.35, 0.4, "#7f96b8", 0.7 ],
-    [ "#8fa3bd", "#c0b4a4", "#f0d9ae", 0.58 ],
+    [ 0.86, 0.14, 0.36, "#ffc481", 2.5, -0.72, 0.34, 0.40, "#6f88b0", 0.72 ],
+    [ "#93a6c0", "#d9b98f", "#f2d4a2", "#ffd9ac", 0.60 ],
     [ "#5a5236", 1.0 ],
-    [ "#e6cfab", 0.0072, "#6d7a45", "#a89b78", 1.06 ]
+    [ "#e8d3b0", 0.0080, "#667a44", "#a89b78", 1.06 ]
   ),
 };
 
@@ -211,12 +218,27 @@ export const skyU = {
   uSunDir: { value: rigNow.sunDir },
   uSunColor: { value: rigNow.sunColor },
   uCloud: { value: rigNow.cloud },
+  uFogColor: { value: rigNow.fogColor },
   uTime: uniforms.uTime,
 };
 
 export const farU = {
   uFarNear: { value: rigNow.farNear },
   uFarFar: { value: rigNow.farFar },
+};
+
+// The floor and the distant field both mirror the sky and dissolve into the
+// fog, so they read the very same live uniform objects the dome does: easeRig
+// mutates rigNow's colours in place, which is what keeps all three layers in
+// step with whatever hour the rig is easing through.
+export const envU = {
+  sunDir: skyU.uSunDir,
+  sunColor: skyU.uSunColor,
+  skyHorizon: skyU.uSkyHorizon,
+  skyMid: skyU.uSkyMid,
+  farNear: farU.uFarNear,
+  farFar: farU.uFarFar,
+  fogColor: skyU.uFogColor,
 };
 
 
@@ -282,9 +304,21 @@ export function build() {
 
   // --- hills: three silhouette bands, paler and hazier the further they are
   const hillLayers = [
-    { z: -104, depth: 26, base: -7, amp: 12.5, freq: 0.0102, seed: 11.3, top: "#4e6a4a", bot: "#3d5340" },
-    { z: -150, depth: 40, base: -4, amp: 15.0, freq: 0.0071, seed: 4.7, top: "#63785f", bot: "#4d6157" },
-    { z: -215, depth: 60, base: 0, amp: 17.0, freq: 0.0049, seed: 21.9, top: "#8194a0", bot: "#6c7f8e" },
+    {
+      z: -104, depth: 26, base: -7, amp: 12.5, freq: 0.0102, seed: 11.3,
+      top: "#547049", bot: "#3d5340", haze: "#7d9687", hazeAt: 0.30, terrace: true,
+    },
+    {
+      z: -150, depth: 40, base: -4, amp: 15.0, freq: 0.0071, seed: 4.7,
+      top: "#63785f", bot: "#4d6157", haze: "#8fa6a2", hazeAt: 0.46, terrace: true,
+    },
+    {
+      z: -215, depth: 60, base: 0, amp: 17.0, freq: 0.0049, seed: 21.9,
+      top: "#8194a0", bot: "#6c7f8e", haze: "#a9bbcc", hazeAt: 0.72,
+      // one far peak: a Japanese field almost always has a mountain sitting
+      // behind it, and a lone cone reads as a volcano rather than as a range
+      peak: { x: -96, w: 150, h: 34 },
+    },
   ];
   for ( const h of hillLayers ) {
     const band = hillBand( h );
@@ -300,20 +334,33 @@ export function build() {
   }
 
   // --- ground + distant field ----------------------------------------------
+  // The floor is a real paddy: each plot sits at its own level and the bunds
+  // between them are modelled, not painted, so they catch the sun and throw a
+  // shade side. The distant field is a ring that takes over past 13 m, so it
+  // floats just above the highest mud the floor reaches and the two layers
+  // never fight over the same pixel.
   const ground = new THREE.Mesh(
-    displacedGround( 150, 84, 0.05 ),
-    makeGroundMaterial( uniforms, "#6b7a58" )
+    paddyFloor( 150, 96, 62 ),
+    makeGroundMaterial( uniforms, "#e8eadc", envU )
   );
   ground.rotation.x = -Math.PI / 2;
   ground.renderOrder = 3; // behind the rice, in front of the distant field
   scene.add( ground );
+  // the floor mesh, so a harness can read the height its vertices actually
+  // reach and tell a modelled bund from a bund painted on a flat plane
+  field.ground = ground;
 
   const farField = new THREE.Mesh(
     new THREE.RingGeometry( 13, 175, 128, 5 ),
-    makeFarFieldMaterial( uniforms, { color: "#ffffff", near: farU.uFarNear, far: farU.uFarFar } )
+    makeFarFieldMaterial( uniforms, {
+      color: "#ffffff",
+      near: farU.uFarNear,
+      far: farU.uFarFar,
+      env: envU,
+    } )
   );
   farField.rotation.x = -Math.PI / 2;
-  farField.position.y = 0.02;
+  farField.position.y = 0.07;
   farField.renderOrder = 4;
   scene.add( farField );
 
@@ -332,29 +379,53 @@ export function build() {
 }
 
 // A low-lying silhouette band: bottom edge near, ridge edge far, vertex
-// colours so the ridge catches a little more light than the valley.
+// colours so the ridge catches a little more light than the valley. Each band
+// carries several rows rather than two, which is what lets the near bands read
+// as terraced slopes and lets the haze sit on the height rather than on the
+// whole band at once.
 function hillBand( spec ) {
   const N = 190;
+  const ROWS = 4;
   const pos = [];
   const col = [];
   const idx = [];
   const topC = new THREE.Color( spec.top );
   const botC = new THREE.Color( spec.bot );
+  const hazeC = new THREE.Color( spec.haze );
+  const floor = spec.base - 9;
   for ( let i = 0; i <= N; i++ ) {
     const x = -350 + 700 * i / N;
     const wob =
       Math.sin( x * spec.freq + spec.seed ) * 0.62 +
       Math.sin( x * spec.freq * 2.7 + spec.seed * 2.3 ) * 0.26 +
       Math.sin( x * spec.freq * 6.1 - spec.seed ) * 0.12;
-    const top = spec.base + spec.amp * ( 0.72 + 0.42 * wob );
-    pos.push( x, spec.base - 9, spec.z );
-    pos.push( x, top, spec.z + spec.depth * 0.55 );
-    col.push( botC.r, botC.g, botC.b );
-    col.push( topC.r, topC.g, topC.b );
+    let amp = spec.amp * ( 0.72 + 0.42 * wob );
+    if ( spec.peak ) {
+      const dx = ( x - spec.peak.x ) / spec.peak.w;
+      amp += spec.peak.h * Math.max( 0, 1 - dx * dx ) * ( 0.86 + 0.14 * wob );
+    }
+    const top = spec.base + amp;
+    for ( let r = 0; r < ROWS; r++ ) {
+      const u = r / ( ROWS - 1 );
+      pos.push( x, floor + ( top - floor ) * u, spec.z + spec.depth * 0.55 * u );
+      const c = botC.clone().lerp( topC, u );
+      c.lerp( hazeC, u * u * spec.hazeAt );
+      if ( spec.terrace ) {
+        // a step in the crop every couple of metres of height: a terraced
+        // hillside, which is how the ground behind a paddy field is usually
+        // cut rather than a smooth green flank
+        const band = Math.sin( floor + ( top - floor ) * u * 2.6 + spec.seed );
+        c.multiplyScalar( 0.90 + 0.16 * ( 0.5 + 0.5 * band ) );
+      }
+      col.push( c.r, c.g, c.b );
+    }
   }
   for ( let i = 0; i < N; i++ ) {
-    const a = i * 2;
-    idx.push( a, a + 2, a + 3, a, a + 3, a + 1 );
+    for ( let r = 0; r < ROWS - 1; r++ ) {
+      const a = i * ROWS + r;
+      const b = a + ROWS;
+      idx.push( a, b, b + 1, a, b + 1, a + 1 );
+    }
   }
   const geo = new THREE.BufferGeometry();
   geo.setAttribute( "position", new THREE.Float32BufferAttribute( pos, 3 ) );
@@ -365,20 +436,108 @@ function hillBand( spec ) {
   return new THREE.Mesh( geo, mat );
 }
 
-// The paddy floor: a wide plane with a gentle noise displacement so the
-// surface is not dead flat under the wind shader.
-function displacedGround( radius, segs, amp ) {
+// ---------------------------------------------------------------------------
+// The paddy grid. These constants are the ones js/shaders.js paints the floor
+// and the distant field with, kept in step by step: a plot is a cell of a
+// warped 5.6 m lattice, its level is a function of the cell index, and the
+// bund is the band that straddles the cell border. Move one side without the
+// other and the painted bunds stop sitting on the modelled ones.
+// ---------------------------------------------------------------------------
+const PADDY_CELL = 5.6;
+const PADDY_BUND = 0.34; // base half-width of an earthen bund
+const PADDY_RIDGE = 0.3; // how high a bund stands over its plot
+
+function bendX( z ) {
+  return Math.sin( z * 0.045 + 1.3 ) * 0.9 + Math.sin( z * 0.011 - 0.7 ) * 1.7;
+}
+function bendZ( x ) {
+  return Math.sin( x * 0.038 - 2.1 ) * 1.1 + Math.sin( x * 0.009 + 0.4 ) * 1.5;
+}
+// metres from the nearest bund centre line, which is also how close a plant
+// may sit to one before the layout drops it
+function bundEdge( x, z ) {
+  const gx = ( x + bendX( z ) ) / PADDY_CELL;
+  const gz = ( z + bendZ( x ) ) / PADDY_CELL;
+  const fx = Math.min( gx - Math.floor( gx ), 1 - ( gx - Math.floor( gx ) ) );
+  const fz = Math.min( gz - Math.floor( gz ), 1 - ( gz - Math.floor( gz ) ) );
+  return Math.min( fx, fz ) * PADDY_CELL;
+}
+function plotLevel( x, z ) {
+  const cx = Math.floor( ( x + bendX( z ) ) / PADDY_CELL );
+  const cz = Math.floor( ( z + bendZ( x ) ) / PADDY_CELL );
+  return 0.03 * ( 0.5 + 0.5 * Math.sin( cx * 1.7 + Math.sin( cz * 2.3 ) * 1.1 ) );
+}
+function mudNoise( x, z ) {
+  return (
+    Math.sin( x * 0.31 ) * 0.34 +
+    Math.sin( z * 0.37 ) * 0.3 +
+    Math.sin( x * 0.71 + z * 0.53 ) * 0.22 +
+    Math.sin( x * 1.3 - z * 0.9 ) * 0.14
+  );
+}
+// the mud surface: the same expression the floor shader solves for the water
+// line, so the flooded part of a plot is flooded in both places
+function floorTop( x, z ) {
+  return plotLevel( x, z ) - 0.03 + 0.055 * ( 0.5 + 0.5 * mudNoise( x, z ) );
+}
+
+// The paddy floor: a wide heightfield whose plots each sit at their own level,
+// with the bunds between them merged into the SAME geometry - one mesh, one
+// draw call, and a ridge that catches the sun and throws a shade side rather
+// than being painted on flat. Bunds are modelled out to `bundRadius`; past it
+// they are only a pixel wide, where the floor and distant shaders keep painting
+// them on the same lattice.
+function paddyFloor( radius, segs, bundRadius ) {
   const geo = new THREE.PlaneGeometry( radius * 2, radius * 2, segs, segs );
   const p = geo.attributes.position.array;
-  const rnd = mulberry32( 0x51de );
   for ( let i = 0; i < p.length; i += 3 ) {
-    const x = p[ i ];
-    const y = p[ i + 1 ];
-    p[ i + 2 ] =
-      amp * ( Math.sin( x * 0.07 ) * 0.5 + Math.cos( y * 0.09 ) * 0.4 + rnd() * 0.5 - 0.25 );
+    // the plane lies in xy and is turned flat by the mesh, so local y is world
+    // -z: the height the shader reads is the plane's own z
+    const wx = p[ i ];
+    const wz = -p[ i + 1 ];
+    p[ i + 2 ] = floorTop( wx, wz );
   }
-  geo.computeVertexNormals();
-  return geo;
+  geo.deleteAttribute( "uv" );
+
+  const pos = Array.from( p );
+  const idx = Array.from( geo.index.array );
+  const base = p.length / 3;
+  const n = Math.ceil( bundRadius * 2 / 2.0 );
+  const kMax = Math.ceil( bundRadius / PADDY_CELL );
+  let v = base;
+  for ( let axis = 0; axis < 2; axis ++ ) {
+    for ( let k = -kMax; k <= kMax; k ++ ) {
+      for ( let s = 0; s <= n; s ++ ) {
+        const t = -bundRadius + bundRadius * 2 * s / n;
+        const cx = axis === 0 ? k * PADDY_CELL - bendX( t ) : t;
+        const cz = axis === 0 ? t : k * PADDY_CELL - bendZ( t );
+        const lv = plotLevel( cx, cz );
+        // the cross axis is the run turned a quarter turn, so one winding
+        // serves both directions; and the strip has to be pushed in the plane's
+        // own space - local y is world -z and the height rides local z - rather
+        // than as world x/y/z, which would stand the bunds tens of metres up
+        const ax = axis === 0 ? -1 : 0;
+        const az = axis === 0 ? 0 : 1;
+        pos.push( cx + ax * PADDY_BUND, -( cz + az * PADDY_BUND ), lv - 0.03 );
+        pos.push( cx + ax * PADDY_BUND * 0.3, -( cz + az * PADDY_BUND * 0.3 ), lv + PADDY_RIDGE );
+        pos.push( cx - ax * PADDY_BUND * 0.3, -( cz - az * PADDY_BUND * 0.3 ), lv + PADDY_RIDGE );
+        pos.push( cx - ax * PADDY_BUND, -( cz - az * PADDY_BUND ), lv - 0.03 );
+      }
+      for ( let s = 0; s < n; s ++ ) {
+        const a = v + s * 4;
+        for ( let j = 0; j < 3; j ++ ) {
+          idx.push( a + j, a + 4 + j, a + 5 + j, a + j, a + 5 + j, a + j + 1 );
+        }
+      }
+      v += ( n + 1 ) * 4;
+    }
+  }
+
+  const out = new THREE.BufferGeometry();
+  out.setAttribute( "position", new THREE.Float32BufferAttribute( pos, 3 ) );
+  out.setIndex( idx );
+  out.computeVertexNormals();
+  return out;
 }
 
 // Two crossed, tapered quads make a trunk that reads correctly from a
@@ -1537,6 +1696,12 @@ export function buildField() {
         const d = Math.hypot( px - FX, pz - FZ );
         if ( d < spec.r0 || d >= spec.r1 ) continue;
         if ( rnd() < 0.07 ) continue; // gaps in the stand
+        // rice grows in the plots, not on the earthen bunds between them, and
+        // the same lattice the floor geometry and the distant field shaders
+        // use is what keeps the bare strips lined up with the ridges. The strip
+        // is wider than the bund's base on purpose: a rice stand is planted up
+        // off the ridge, so the earthen margin is what reads from the path
+        if ( bundEdge( px, pz ) < PADDY_BUND + 0.16 ) continue;
         spots.push( px, pz, d );
         // a second seed beside some of the foreground plants: a density rule,
         // keyed to the band rather than to a plant detail that no longer exists

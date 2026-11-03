@@ -275,10 +275,45 @@ if ( vHi > 0.0 ) {
 // Ground: procedural paddy floor - wet mud, trampled ridges, faint sheen that
 // answers to the same wind as the rice.
 // ---------------------------------------------------------------------------
-export const GROUND_PARS = `
+// ---------------------------------------------------------------------------
+// The paddy grid. These constants are the ones js/app.js builds the floor
+// geometry from, so the painted bunds land exactly on the modelled ones:
+// a plot is a cell of a warped 5.6 m lattice, its level is a function of the
+// cell index, and the bund is the band that straddles the cell border.
+// ---------------------------------------------------------------------------
+export const PADDY_CELL = 5.6;
+
+export const PADDY_PARS = `
 uniform float uTime;
 uniform float uWind;
 uniform float uWindSpeed;
+uniform vec3 uSunDir;
+uniform vec3 uSunColor;
+uniform vec3 uSkyHorizon;
+uniform vec3 uSkyMid;
+uniform vec3 uFarNear;
+uniform vec3 uFarFar;
+uniform vec3 uFogColor;
+
+float paddyBendX( float z ) {
+  return sin( z * 0.045 + 1.3 ) * 0.9 + sin( z * 0.011 - 0.7 ) * 1.7;
+}
+float paddyBendZ( float x ) {
+  return sin( x * 0.038 - 2.1 ) * 1.1 + sin( x * 0.009 + 0.4 ) * 1.5;
+}
+float paddyLevel( vec2 cell ) {
+  return 0.030 * ( 0.5 + 0.5 * sin( cell.x * 1.7 + sin( cell.y * 2.3 ) * 1.1 ) );
+}
+float paddyMud( vec2 p ) {
+  return sin( p.x * 0.31 ) * 0.34 + sin( p.y * 0.37 ) * 0.30
+    + sin( p.x * 0.71 + p.y * 0.53 ) * 0.22 + sin( p.x * 1.3 - p.y * 0.9 ) * 0.14;
+}
+float paddyKind( vec2 cell ) {
+  return 0.5 + 0.5 * sin( cell.x * 2.11 + sin( cell.y * 1.73 ) * 2.2 );
+}
+`;
+
+export const GROUND_PARS = PADDY_PARS + `
 varying vec3 vGroundPos;
 `;
 
@@ -289,17 +324,69 @@ vGroundPos = worldPos;
 export const GROUND_FRAGMENT = `
 {
   vec3 p = vGroundPos;
-  float row = fract( ( p.x + p.z * 0.12 ) * 3.1 );
-  float ridge = smoothstep( 0.05, 0.28, row ) * smoothstep( 0.95, 0.68, row );
-  float n = sin( p.x * 1.9 ) * sin( p.z * 2.3 ) + sin( p.x * 0.41 + 1.7 ) * sin( p.z * 0.53 - 0.9 );
-  float mud = 0.34 + 0.10 * n;
-  vec3 wet = vec3( 0.150, 0.176, 0.132 );
-  vec3 dry = vec3( 0.245, 0.268, 0.196 );
-  vec3 col = mix( wet, dry, clamp( mud, 0.0, 1.0 ) );
-  col = mix( col, col * 1.22, ridge * 0.5 );
-  float sheen = 0.5 + 0.5 * sin( uTime * uWindSpeed * 0.86 + p.x * 0.45 + p.z * 0.13 );
-  col += vec3( 0.012, 0.020, 0.010 ) * sheen * uWind;
-  diffuseColor.rgb *= col * 3.2;
+  float t = uTime * uWindSpeed;
+
+  // --- the plot grid, shared with the floor geometry ---------------------
+  vec2 g = vec2( p.x + paddyBendX( p.z ), p.z + paddyBendZ( p.x ) );
+  vec2 cell = floor( g / 5.6 );
+  vec2 f = fract( g / 5.6 );
+  float edge = min( min( f.x, 1.0 - f.x ), min( f.y, 1.0 - f.y ) ) * 5.6;
+
+  // each plot sits at its own level and holds its own water: the mud under it
+  // varies, the surface does not, so the flooded part of a plot is wherever
+  // the mud sits below the water line
+  float level = paddyLevel( cell );
+  float mudTop = level - 0.030 + 0.055 * ( 0.5 + 0.5 * paddyMud( p.xz ) );
+  float depth = level + 0.045 - mudTop;
+  float flooded = smoothstep( 0.0, 0.014, depth );
+
+  // --- the bund: an earthen ridge with grass on the crest ----------------
+  // the band is kept just wider than the modelled bund's base (0.34 m), so the
+  // painted bund sits on the modelled one instead of smearing out into the plot
+  float bund = 1.0 - smoothstep( 0.26, 0.44, edge );
+  float crest = 1.0 - smoothstep( 0.0, 0.16, edge );
+  float blade = 0.5 + 0.5 * sin( p.x * 41.0 + p.z * 7.0 + sin( p.z * 0.9 ) * 9.0 );
+  vec3 bundCol = mix( vec3( 0.098, 0.086, 0.062 ), vec3( 0.132, 0.168, 0.086 ), crest );
+  bundCol *= 0.80 + 0.34 * blade;
+  // a wet dark seam where the bund meets the water
+  bundCol = mix( bundCol, bundCol * 0.55, smoothstep( 0.34, 0.16, edge ) * flooded );
+
+  // --- the mud under the water -------------------------------------------
+  vec3 mudCol = mix( vec3( 0.086, 0.098, 0.074 ), vec3( 0.176, 0.162, 0.126 ),
+                     smoothstep( 0.012, -0.026, depth ) );
+  mudCol *= 0.80 + 0.38 * ( 0.5 + 0.5 * paddyMud( p.xz * 3.7 ) );
+
+  // --- the water film: the sky, mirrored and rippled ---------------------
+  vec3 toEye = normalize( cameraPosition - p );
+  vec3 refl = vec3( -toEye.x, max( toEye.y, 0.02 ), -toEye.z );
+  float ripple = sin( ( p.x + p.z * 0.22 ) * 9.0 + t * 1.3 + sin( p.z * 0.7 ) * 3.0 )
+    + 0.6 * sin( ( p.x * 0.4 - p.z * 0.9 ) * 14.0 - t * 2.1 );
+  refl.xz += ripple * 0.030 * uWind;
+  float ry = clamp( refl.y, 0.0, 1.0 );
+  vec3 skyRef = mix( uSkyHorizon, uSkyMid, pow( ry, 0.55 ) );
+  skyRef = mix( skyRef, uSunColor * 1.12, pow( max( dot( normalize( refl ),
+      normalize( uSunDir ) ), 0.0 ), 6.0 ) * 0.42 );
+  float fres = 0.16 + 0.84 * pow( 1.0 - clamp( toEye.y, 0.0, 1.0 ), 3.4 );
+  vec3 waterCol = mix( mudCol * 0.82, skyRef, fres * 0.66 );
+  waterCol += vec3( 0.030, 0.034, 0.026 ) * max( ripple, 0.0 ) * 0.5 * uWind;
+  // the rows of rice throw a soft shade into the shallow water
+  waterCol *= 1.0 - 0.16 * ( 0.5 + 0.5 * sin( p.x * 19.0 + sin( p.z * 0.6 ) * 5.0 ) );
+  // duckweed: a few bits of green resting on the surface
+  vec2 wd = floor( p.xz * 13.0 );
+  float weed = step( 0.955, fract( sin( dot( wd, vec2( 7.31, 31.73 ) ) ) * 4137.31 ) );
+  waterCol = mix( waterCol, vec3( 0.104, 0.166, 0.070 ), weed * flooded * 0.85 );
+
+  vec3 col = mix( waterCol, bundCol, bund );
+
+  // --- the seam: past 13 m the distant field takes over, so hand the floor
+  // over as the same patchwork the distant field paints ------------------
+  float dist = length( p.xz - cameraPosition.xz );
+  float kind = paddyKind( cell );
+  vec3 plotCol = mix( vec3( 0.150, 0.170, 0.104 ), vec3( 0.205, 0.196, 0.120 ), kind );
+  plotCol = mix( plotCol, uFarNear, 0.55 );
+  col = mix( col, plotCol, smoothstep( 10.5, 13.0, dist ) * 0.92 );
+
+  diffuseColor.rgb *= col * 2.6;
 }
 `;
 
@@ -307,12 +394,7 @@ export const GROUND_FRAGMENT = `
 // Distant field: the plain beyond the instanced rice. One plane, coloured and
 // animated by the same wave train, so the sea keeps rolling to the tree line.
 // ---------------------------------------------------------------------------
-export const FAR_FIELD_PARS = `
-uniform float uTime;
-uniform float uWind;
-uniform float uWindSpeed;
-uniform vec3 uFarNear;
-uniform vec3 uFarFar;
+export const FAR_FIELD_PARS = PADDY_PARS + `
 varying vec3 vFarPos;
 `;
 
@@ -323,15 +405,38 @@ vFarPos = worldPos;
 export const FAR_FIELD_FRAGMENT = `
 {
   vec3 p = vFarPos;
-  float d = clamp( ( length( p.xz - cameraPosition.xz ) - 40.0 ) / 110.0, 0.0, 1.0 );
   float t = uTime * uWindSpeed;
+  float dist = length( p.xz - cameraPosition.xz );
+
+  // the same plot lattice the floor under the rice is built from, so the
+  // distant patchwork lines up with the paddies the camera stands in
+  vec2 g = vec2( p.x + paddyBendX( p.z ), p.z + paddyBendZ( p.x ) );
+  vec2 cell = floor( g / 5.6 );
+  vec2 f = fract( g / 5.6 );
+  float edge = min( min( f.x, 1.0 - f.x ), min( f.y, 1.0 - f.y ) ) * 5.6;
+  float kind = paddyKind( cell );
+  float bund = 1.0 - smoothstep( 0.16, 0.44, edge );
+
+  // the wave train the rice itself rides, but only over the plots that hold
+  // a crop: a ploughed or flooded plot stays flat water
   float w1 = sin( t * 0.86 + ( p.x * 0.072 + p.z * 0.021 ) * 6.283185 );
   float w2 = sin( t * 1.53 + ( p.x * 0.185 + p.z * 0.128 ) * 6.283185 );
   float wave = w1 * 0.72 + w2 * 0.34;
-  float streak = 0.5 + 0.5 * sin( p.x * 11.0 + p.z * 2.2 + sin( p.z * 0.22 ) * 4.0 );
-  vec3 col = mix( uFarNear, uFarFar, d );
-  col *= 0.86 + 0.20 * ( 0.5 + 0.5 * wave ) * ( 0.35 + 0.65 * uWind );
-  col *= 0.90 + 0.16 * streak;
+  float crop = smoothstep( 0.16, 0.40, kind );
+
+  // a plot is green rice, ripe gold, or open water with the sky on it
+  vec3 green = vec3( 0.150, 0.196, 0.104 );
+  vec3 ripe = vec3( 0.236, 0.212, 0.126 );
+  vec3 water = mix( uSkyHorizon, uSkyMid, 0.55 ) * 0.62;
+  vec3 col = mix( water, mix( green, ripe, smoothstep( 0.52, 0.86, kind ) ), crop );
+  col *= 0.84 + 0.30 * ( 0.5 + 0.5 * wave ) * ( 0.30 + 0.70 * uWind );
+  col = mix( col, vec3( 0.128, 0.150, 0.086 ), bund );
+
+  // aerial haze: the patchwork loses its contrast and picks up the fog
+  float d = clamp( ( dist - 16.0 ) / 118.0, 0.0, 1.0 );
+  vec3 near = mix( col, uFarNear, 0.35 );
+  col = mix( near, uFarFar, d );
+  col = mix( col, uFogColor, d * d * 0.45 );
   diffuseColor.rgb = col;
 }
 `;
@@ -346,9 +451,34 @@ uniform vec3 uSkyMid;
 uniform vec3 uSkyHorizon;
 uniform vec3 uSunDir;
 uniform vec3 uSunColor;
+uniform vec3 uFogColor;
 uniform float uCloud;
 uniform float uTime;
 varying vec3 vSkyDir;
+
+float skyHash( vec2 p ) {
+  return fract( sin( dot( p, vec2( 127.1, 311.7 ) ) ) * 43758.5453 );
+}
+float skyNoise( vec2 p ) {
+  vec2 i = floor( p );
+  vec2 q = fract( p );
+  float a = skyHash( i );
+  float b = skyHash( i + vec2( 1.0, 0.0 ) );
+  float c = skyHash( i + vec2( 0.0, 1.0 ) );
+  float d = skyHash( i + vec2( 1.0, 1.0 ) );
+  vec2 u = q * q * ( 3.0 - 2.0 * q );
+  return mix( mix( a, b, u.x ), mix( c, d, u.x ), u.y );
+}
+float skyFbm( vec2 p ) {
+  float v = 0.0;
+  float amp = 0.52;
+  for ( int i = 0; i < 4; i ++ ) {
+    v += amp * skyNoise( p );
+    p = p * 2.07 + vec2( 13.1, -7.7 );
+    amp *= 0.5;
+  }
+  return v;
+}
 `;
 
 export const SKY_VERTEX = `
@@ -359,30 +489,52 @@ export const SKY_FRAGMENT = `
 {
   vec3 dir = normalize( vSkyDir );
   float up = clamp( dir.y, -1.0, 1.0 );
+  vec3 sun = normalize( uSunDir );
+  float az = dot( dir, sun );
+  float warm = pow( max( az, 0.0 ), 2.2 );
+  float sunUp = clamp( sun.y, -0.25, 1.0 );
 
-  float grad = pow( max( up, 0.0 ), 0.52 );
-  vec3 col = mix( uSkyHorizon, uSkyMid, smoothstep( 0.0, 0.34, grad ) );
-  col = mix( col, uSkyTop, smoothstep( 0.30, 1.0, grad ) );
+  // the ramp sits lower and paler when the sun is low, higher and deeper when
+  // it is overhead, which is what makes the hour read as an hour
+  float lift = 0.30 + 0.42 * smoothstep( -0.1, 0.8, sunUp );
+  float grad = pow( max( up, 0.0 ), lift );
+  vec3 col = mix( uSkyHorizon, uSkyMid, smoothstep( 0.0, 0.32, grad ) );
+  col = mix( col, uSkyTop, smoothstep( 0.28, 0.98, grad ) );
 
-  // below the horizon the dome picks up field haze instead of sky
-  col = mix( col, uSkyHorizon * 0.94, smoothstep( 0.0, -0.22, up ) );
+  // haze along the horizon in the fog's own colour, so the hills and the tree
+  // line dissolve into the sky instead of cutting a hard line against it
+  float haze = smoothstep( 0.34, 0.01, up ) * smoothstep( -0.10, 0.03, up );
+  col = mix( col, uFogColor, haze * 0.80 );
 
-  // layered cloud: three soft octaves projected onto the dome
-  float h = max( up, 0.02 );
-  vec2 q = dir.xz / ( h + 0.22 );
-  float c1 = sin( q.x * 0.42 + uTime * 0.012 ) * sin( q.y * 0.37 - uTime * 0.009 );
-  float c2 = sin( q.x * 1.05 - uTime * 0.02 ) * sin( q.y * 0.88 + uTime * 0.015 );
-  float c3 = sin( q.x * 2.3 + 1.7 ) * sin( q.y * 1.9 - 0.6 );
-  float cloud = c1 * 0.55 + c2 * 0.30 + c3 * 0.15;
-  cloud = smoothstep( 0.05, 0.72, cloud * 0.5 + 0.5 );
-  cloud *= smoothstep( 0.02, 0.30, up ) * smoothstep( 0.92, 0.42, up );
-  vec3 cloudTint = mix( vec3( 1.04, 1.04, 1.05 ), uSunColor * 1.6, 0.35 );
-  col = mix( col, col * cloudTint, cloud * uCloud );
+  // the sun-side horizon glows, and the glow is strongest on a low sun
+  float glow = warm * smoothstep( 0.30, 0.0, up ) * ( 0.35 + 0.65 * ( 1.0 - smoothstep( 0.0, 0.6, sunUp ) ) );
+  col = mix( col, uSunColor * 1.06, glow * 0.62 );
 
-  // sun bloom plus a soft warm halo, so the light direction is legible
-  float sd = max( dot( dir, normalize( uSunDir ) ), 0.0 );
-  col += uSunColor * pow( sd, 90.0 ) * 1.25;
-  col += uSunColor * pow( sd, 7.0 ) * 0.16 * smoothstep( 0.0, 0.35, up );
+  // cloud: four octaves of value noise projected onto the dome, drifting
+  float h = max( up, 0.03 );
+  vec2 q = dir.xz / ( h + 0.16 ) * 0.42 + vec2( uTime * 0.006, uTime * 0.004 );
+  float fbm = skyFbm( q );
+  float cover = smoothstep( 0.60 - 0.26 * uCloud, 0.88 - 0.10 * uCloud, fbm );
+  float thick = smoothstep( 0.58, 0.96, fbm );
+  cover *= smoothstep( 0.015, 0.22, up ) * smoothstep( 0.95, 0.46, up );
+
+  // a cloud body is brighter at the top and greyer at its base, where it picks
+  // up the field bounce rather than the sky
+  vec3 cloudCol = mix( uFogColor * 0.92, vec3( 1.05, 1.04, 1.02 ), 0.42 + 0.58 * thick );
+  cloudCol = mix( cloudCol, uSkyMid * 1.10, smoothstep( 0.30, 0.75, up ) * 0.45 );
+  // the sun catches the cloud's rim on the side it sits
+  cloudCol += uSunColor * pow( max( az, 0.0 ), 5.0 ) * ( 0.30 + 0.70 * thick );
+  col = mix( col, cloudCol, cover );
+
+  // the sun itself: a disc, a tight bloom and a wide atmospheric halo
+  float disc = smoothstep( 0.99958, 0.99982, az );
+  col = mix( col, vec3( 1.25, 1.16, 1.02 ) * ( 1.0 + uSunColor ), disc );
+  col += uSunColor * pow( max( az, 0.0 ), 120.0 ) * 0.85;
+  col += uSunColor * pow( max( az, 0.0 ), 9.0 ) * 0.14 * smoothstep( -0.02, 0.30, up );
+  col += uSunColor * pow( max( az, 0.0 ), 2.2 ) * 0.05;
+
+  // below the horizon the dome stops being sky and becomes field haze
+  col = mix( col, uFogColor * 0.92, smoothstep( 0.0, -0.20, up ) );
 
   gl_FragColor = vec4( col, 1.0 );
 }
@@ -452,21 +604,29 @@ export function makeWindMaterial(uniforms, opts) {
   return mat;
 }
 
-// Ground: Lambert + procedural paddy floor.
-export function makeGroundMaterial(uniforms, color) {
+// Ground: Lambert + procedural paddy floor. `env` hands the floor the same
+// live sky/fog uniform objects the dome and the distant field read, so the
+// water on the floor reflects whatever hour the rig is easing through.
+export function makeGroundMaterial(uniforms, color, env) {
   const mat = new THREE.MeshLambertMaterial({ color, fog: true });
   mat.onBeforeCompile = ( shader ) => {
     shader.uniforms.uTime = uniforms.uTime;
     shader.uniforms.uWind = uniforms.uWind;
     shader.uniforms.uWindSpeed = uniforms.uWindSpeed;
+    shader.uniforms.uSunDir = env.sunDir;
+    shader.uniforms.uSunColor = env.sunColor;
+    shader.uniforms.uSkyHorizon = env.skyHorizon;
+    shader.uniforms.uSkyMid = env.skyMid;
+    shader.uniforms.uFarNear = env.farNear;
+    shader.uniforms.uFarFar = env.farFar;
+    shader.uniforms.uFogColor = env.fogColor;
     shader.vertexShader = "varying vec3 vGroundPos;\n" + shader.vertexShader;
     shader.vertexShader = shader.vertexShader.replace(
       "#include <begin_vertex>",
       "#include <begin_vertex>\n vGroundPos = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;"
     );
     shader.fragmentShader =
-      "uniform float uTime;\nuniform float uWind;\nuniform float uWindSpeed;\nvarying vec3 vGroundPos;\n" +
-      shader.fragmentShader;
+      PADDY_PARS + "\nvarying vec3 vGroundPos;\n" + shader.fragmentShader;
     shader.fragmentShader = shader.fragmentShader.replace(
       "#include <map_fragment>",
       GROUND_FRAGMENT
@@ -475,23 +635,28 @@ export function makeGroundMaterial(uniforms, color) {
   return mat;
 }
 
-// Distant field: unlit but fogged plane, coloured by the same wave train.
+// Distant field: unlit but fogged plane, coloured as the same patchwork of
+// plots the floor under the rice is built from.
 export function makeFarFieldMaterial(uniforms, opts) {
   const mat = new THREE.MeshBasicMaterial({ color: opts.color, fog: true });
   mat.onBeforeCompile = ( shader ) => {
     shader.uniforms.uTime = uniforms.uTime;
     shader.uniforms.uWind = uniforms.uWind;
     shader.uniforms.uWindSpeed = uniforms.uWindSpeed;
+    shader.uniforms.uSunDir = opts.env.sunDir;
+    shader.uniforms.uSunColor = opts.env.sunColor;
+    shader.uniforms.uSkyHorizon = opts.env.skyHorizon;
+    shader.uniforms.uSkyMid = opts.env.skyMid;
     shader.uniforms.uFarNear = opts.near;
     shader.uniforms.uFarFar = opts.far;
+    shader.uniforms.uFogColor = opts.env.fogColor;
     shader.vertexShader = "varying vec3 vFarPos;\n" + shader.vertexShader;
     shader.vertexShader = shader.vertexShader.replace(
       "#include <begin_vertex>",
       "#include <begin_vertex>\n vFarPos = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;"
     );
     shader.fragmentShader =
-      "uniform float uTime;\nuniform float uWind;\nuniform float uWindSpeed;\nuniform vec3 uFarNear;\nuniform vec3 uFarFar;\nvarying vec3 vFarPos;\n" +
-      shader.fragmentShader;
+      PADDY_PARS + "\nvarying vec3 vFarPos;\n" + shader.fragmentShader;
     shader.fragmentShader = shader.fragmentShader.replace(
       "#include <map_fragment>",
       FAR_FIELD_FRAGMENT
@@ -509,6 +674,7 @@ export function makeSkyMaterial(params) {
       uSkyHorizon: params.uSkyHorizon,
       uSunDir: params.uSunDir,
       uSunColor: params.uSunColor,
+      uFogColor: params.uFogColor,
       uCloud: params.uCloud,
       uTime: params.uTime,
     },
