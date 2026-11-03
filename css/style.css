@@ -42,10 +42,10 @@ body {
 }
 
 /* -------------------------------------------------------------- panel -- */
-/* the wordmark, the light row and the old camera / wind / playback rows are all
-   gone, so the canvas carries the whole first impression and the bar is a single
-   row deep on a desktop (the rig row only arrives with .touch) - which is what
-   let every inset, gap and button here shrink */
+/* the wordmark, the view row, the light row and the old camera / wind / playback
+   rows are all gone, so the canvas carries the whole first impression and the bar
+   is a single row deep on a desktop (the rig row only arrives with .touch) - which
+   is what let every inset, gap and button here shrink */
 .panel {
   position: fixed;
   left: 10px;
@@ -111,7 +111,9 @@ button.on {
   font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
   font-size: 11px;
   letter-spacing: 0.04em;
-  color: var(--ink-dim);
+  /* the readout floats over the crop rather than over the panel, so it takes
+     black rather than the dim ink the controls share */
+  color: #000;
   pointer-events: none;
 }
 
@@ -230,7 +232,7 @@ html.touch .panel {
   /* the bar spans the whole bottom edge rather than hugging the left: at a
      phone width a narrow panel would wrap the rows into a stack, which eats the
      framing. Full width keeps each row on one line, and with the light, camera,
-     wind and playback rows gone the bar is only the view row plus the rig row -
+     wind and playback rows gone the bar is only the sickle row plus the rig row -
      two rows deep on a portrait phone, one on a landscape phone where .rig is
      hidden - so the thumb pad keeps its glass */
   left: 8px;
@@ -333,11 +335,10 @@ html.touch .stats {
   stroke-linejoin: round;
 }
 
-/* the sickle row is one button that flips a mode rather than a row that picks
-   one of two framings, so it keeps the panel's rhythm: same gap, same height,
-   and the .on state the view buttons already use is what says the blade is
-   drawn. On a phone the bar is three rows deep rather than two, which is what
-   leaves the thumb pad its glass - the pad is placed off the bar's top edge
+/* the sickle row is now the only row on the desktop bar, so it keeps the panel's
+   rhythm: same gap, same height, and the .on state it carries is what says the
+   blade is drawn. On a phone the bar is two rows deep rather than one, which is
+   what leaves the thumb pad its glass - the pad is placed off the bar's top edge
    rather than in a fixed corner */
 .tool button {
   min-width: 46px;

@@ -37,11 +37,12 @@
     <canvas id="scene-canvas"></canvas>
 
     <section id="panel" class="panel" aria-label="Field controls">
-      <div class="row views">
-        <span class="label">View</span>
-        <button data-action="view" data-value="open">Open field</button>
-        <button data-action="view" data-value="among">Among the rice</button>
-      </div>
+      <!--
+        the view row is gone: the two framings still exist, they are just reached
+        with the v key and with ?view= in the url rather than with a thumb on the
+        glass, which is what leaves the bar the one control a viewer actually
+        reaches for
+      -->
 
       <!--
         the sickle toggle is one button rather than a pair: it flips a mode, so
@@ -64,8 +65,9 @@
       The hour has no buttons here any more: it walks itself through morning,
       afternoon and golden hour on the frame clock (one minute each by default, ?light=
       pins one). Wind, pause and the walk are keyboard-only - Shift+Arrow nudges
-      the wind, Space toggles pause, k draws or sheathes the sickle, and the arrow
-      keys / WASD walk. The rig row stays because a phone has no E / Q.
+      the wind, Space toggles pause, k draws or sheathes the sickle, v swaps the
+      framing, and the arrow keys / WASD walk. The rig row stays because a phone
+      has no E / Q.
     -->
 
     <!--
@@ -75,7 +77,10 @@
       takes over while the field is under the golden hour; whichever loop is
       running stops the moment its hour leaves, and the skill check answers itself
       with cutgreat.mp3 for a great cut, cutnormal.mp3 for an ordinary one and
-      hurt.mp3 for a miss. ?sound=0 mutes the whole field.
+      hurt.mp3 for a miss. ?sound=0 mutes the whole field. A loop the browser
+      has refused to start - its autoplay policy wants the visitor to touch the
+      page first - is asked for again on the next frame, so the bird joins in
+      the moment the visitor moves.
     -->
 
     <div id="pad" class="pad" aria-label="Walk pad">

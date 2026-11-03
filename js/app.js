@@ -966,6 +966,14 @@ function verdictText( grade ) {
 // file again starts it at the top of its loop rather than at wherever the last
 // one left it.
 //
+// A loop is owned only once the browser has accepted its play. The autoplay
+// policy refuses one before the visitor has touched the page, and a refused
+// play never asks for the mp3 at all - the element stays at readyState 0 - so
+// owning the hour on the file name alone would silence the whole session, since
+// the hour never asks again for a file it already believes it has. A refusal
+// therefore leaves the hour unowned and the next frame asks again, which is what
+// brings the bird in the moment the visitor moves.
+//
 // The skill check owns the other three, and it answers itself: a great cut, an
 // ordinary cut (good and normal share one cue) and a miss.
 // ---------------------------------------------------------------------------
@@ -985,6 +993,7 @@ export const sound = {
   volume: Math.min( 1, Math.max( 0, params.sound ) ), // ?sound=0 mutes the field
   ambience: null, // the looping element while the current hour's loop holds
   ambienceName: "", // which loop file that element is, "" while nothing loops
+  pending: false, // a loop play the browser has not answered yet
   plays: [], // what the page chose to play, oldest first: { name, reason, at, stop }
   elements: {}, // file -> element, so a cue is fetched once and replayed from memory
 };
@@ -1038,6 +1047,10 @@ export function ambience() {
   // the hour already owns the loop it wants, so there is nothing to swap - and
   // a bird that carries on from morning into afternoon never restarts mid-call
   if ( want === sound.ambienceName ) return;
+  // the last attempt is still being answered by the browser, so nothing is
+  // known about it yet: waiting one frame is cheaper than starting a second
+  // fetch for the same file behind it
+  if ( sound.pending ) return;
   if ( sound.ambience ) {
     const left = sound.ambienceName;
     sound.ambience.pause();
@@ -1054,10 +1067,32 @@ export function ambience() {
   const a = element( want );
   a.loop = true;
   a.currentTime = 0;
-  a.play().catch( () => {} );
-  sound.ambience = a;
-  sound.ambienceName = want;
-  logPlay( want, state.light, false );
+  // a play() before the visitor has touched the page is refused outright: the
+  // browser's autoplay policy wants a user gesture first, and a refused play
+  // leaves the element at readyState 0 - the mp3 is never even asked for. Owning
+  // the loop on the name alone would therefore silence the whole session, since
+  // the hour never asks again for a file it already believes it has. So the loop
+  // is owned only once its play has actually been accepted, and a refusal leaves
+  // the hour unowned: the next frame asks again, and the bird starts the moment
+  // the visitor moves
+  sound.pending = true;
+  const accepted = () => {
+    sound.pending = false;
+    sound.ambience = a;
+    sound.ambienceName = want;
+    logPlay( want, state.light, false );
+  };
+  // the refusal is still swallowed on purpose - the field keeps running and the
+  // console stays clean - but it leaves nothing owning the hour, which is what
+  // lets the next frame ask for the loop again
+  const refused = () => {
+    sound.pending = false;
+    sound.ambience = null;
+    sound.ambienceName = "";
+  };
+  const attempt = a.play();
+  if ( attempt ) attempt.then( accepted, refused );
+  else accepted(); // a browser that hands back no promise never refuses one
 }
 
 // The pool is built once, with every slot parked at zero scale: four verts on
@@ -1871,8 +1906,8 @@ export const cam = {
   tap: null, // a finger down on the field: { x0, y0, x, y, moved, t0 } until lift says whether it was a tap
 };
 
-// A view button is also a framing reset: whatever the viewer walked to is
-// dropped, which is what makes the two framings reliable reference shots.
+// Swapping the framing is also a framing reset: whatever the viewer walked to
+// is dropped, which is what makes the two framings reliable reference shots.
 export function setView( name ) {
   if ( !( name in VIEWS ) ) return;
   state.view = name;
@@ -2111,20 +2146,17 @@ export function setSickle( v ) {
 }
 
 export function wireUI() {
-  // two actions share the loop: the view row picks a framing, the sickle row
-  // flips a toggle, so the click reads the row it belongs to rather than
-  // assuming the one action the panel used to have
+  // the view row left the panel, so the sickle toggle is the only action still
+  // on the glass and the loop no longer has to sort two actions from one
+  // another; the framing is reached with the v key and with ?view= in the url,
+  // which is why setView stays exported
   for ( const node of document.querySelectorAll( "[data-action]" ) ) {
     const action = node.getAttribute( "data-action" );
     node.addEventListener( "click", ( e ) => {
-      if ( action === "sickle" ) {
-        // setSickle paints the .on class itself, so the click and the k key
-        // leave the panel reading the same thing the mode is
-        setSickle( !state.sickle );
-        return;
-      }
-      setView( node.getAttribute( "data-value" ) );
-      node.classList.toggle( "on", true );
+      if ( action !== "sickle" ) return;
+      // setSickle paints the .on class itself, so the click and the k key
+      // leave the panel reading the same thing the mode is
+      setSickle( !state.sickle );
     } );
     if ( action === "sickle" ) {
       sickleButton = node;
@@ -2263,6 +2295,8 @@ export function wireUI() {
     // l steps to the next hour by hand - the same step the automatic cycle takes,
     // so it also resets the clock and does not immediately re-trigger
     if ( e.key === "l" ) advanceLight();
+    // v is now the only way a viewer reaches the two framings by hand: the
+    // view row left the panel, and setView still drops whatever they walked to
     else if ( e.key === "v" ) setView( state.view === "open" ? "among" : "open" );
     // k draws or sheathes the sickle: the same flip the panel's toggle takes, so
     // a keyboard and a thumb cannot disagree about which of the two the pointer
