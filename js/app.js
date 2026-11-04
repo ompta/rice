@@ -28,6 +28,9 @@
 //   sound         the daylight hours loop the small bird, the golden hour loops
 //                 the evening cicada, and the skill check answers itself: a
 //                 great cut, an ordinary cut, a miss
+//   purse         a cut pays the field: 1 gold for a normal cut, 2 for a good
+//                 one, 3 for a great one, and every sickle swipe begun takes
+//                 1 gold off the purse
 //
 // Nothing is loaded: every geometry and material here is procedural, so the
 // page's only dependency is three.js itself, which index.html's import map
@@ -690,6 +693,45 @@ export const SKILL = {
 
 export const harvest = { cut: 0, great: 0, good: 0, normal: 0, fail: 0 };
 
+// ---------------------------------------------------------------------------
+// The purse. A cut pays the field, and the grade decides how much: a normal
+// cut is worth 1 gold, a good one 2 and a great one 3, so the money reads back
+// exactly the way the verdict does. A miss earns nothing, which is what makes
+// the check worth playing rather than spamming.
+//
+// The sickle is the other half of the rule: a swipe is a use of the tool
+// rather than a free mow, so the fee is spent on the press that starts the
+// swipe - a line drawn over already-cut ground or open water still costs gold.
+//
+// earned and spent are kept apart so the readout can name both sides of the
+// ledger: gold is what the player actually holds, and a fee with nothing left
+// to pay is recorded as unpaid rather than debt, since a purse that reads
+// "-2 gold" is not a thing a player can carry.
+// ---------------------------------------------------------------------------
+export const GOLD = { normal: 1, good: 2, great: 3, sickle: 1 };
+
+export const purse = { earned: 0, spent: 0, unpaid: 0, gold: 0 };
+
+// what a grade is worth, 0 for a grade the table does not name (a miss)
+export function earnGold( grade ) {
+  const value = GOLD[ grade ] !== undefined ? GOLD[ grade ] : 0;
+  if ( value <= 0 ) return 0;
+  purse.earned = purse.earned + value;
+  purse.gold = purse.earned - purse.spent;
+  return value;
+}
+
+// spend a fee off the purse, capped at what is actually held: the returned
+// number is what was really paid, so a caller can count what went unpaid
+export function payGold( amount ) {
+  const held = purse.earned - purse.spent;
+  const paid = Math.max( 0, Math.min( amount, held ) );
+  purse.spent = purse.spent + paid;
+  purse.unpaid = purse.unpaid + ( amount - paid );
+  purse.gold = purse.earned - purse.spent;
+  return paid;
+}
+
 export const skill = {
   active: false,
   tier: -1,
@@ -701,6 +743,7 @@ export const skill = {
   startedAt: 0,
   at: 0, // where the needle was when the last click landed
   last: "", // "" | fail | normal | good | great
+  gold: 0, // the money the last pass paid in, 0 for a miss
   verdictAt: -1, // when the last verdict was shown, -1 before the first check
 };
 
@@ -733,6 +776,9 @@ export function resolveSkill() {
   const grade = gradeAt( skill.needle );
   skill.at = skill.needle;
   skill.last = grade;
+  // the money the pass paid in, kept on the check so the verdict can name it.
+  // A miss is not in the table, so it earns nothing and the verdict stays bare
+  skill.gold = earnGold( grade );
   skill.verdictAt = performance.now();
   skill.active = false;
   harvest[ grade ] = harvest[ grade ] + 1;
@@ -944,9 +990,12 @@ function paintMeter( now ) {
 }
 
 function verdictText( grade ) {
-  if ( grade === "great" ) return "Great cut";
-  if ( grade === "good" ) return "Good cut";
-  if ( grade === "normal" ) return "Cut";
+  // a pass names the gold it paid in, so the money is visible at the moment
+  // the cut lands rather than only in the corner readout
+  const gain = skill.gold > 0 ? " +" + skill.gold : "";
+  if ( grade === "great" ) return "Great cut" + gain;
+  if ( grade === "good" ) return "Good cut" + gain;
+  if ( grade === "normal" ) return "Cut" + gain;
   if ( grade === "fail" ) return "Missed";
   return "";
 }
@@ -1421,6 +1470,11 @@ export function beginStroke( x, y, type ) {
   // a fingertip is sloppier than a cursor, and hover.radius already encodes how
   // much sloppier: widening the band by the same amount keeps the blade honest
   sickle.band = SICKLE.band + Math.max( 0, hover.radius - 13 );
+  // the swipe is a use of the tool, so the fee is spent on the press that
+  // starts it rather than on the plants it finds: a line over already-cut
+  // ground or open water still costs gold, which is what makes a flick a
+  // decision rather than a free mow of the stand
+  payGold( GOLD.sickle );
   sickle.swings = sickle.swings + 1;
 }
 
@@ -2609,6 +2663,9 @@ export function frame( now ) {
         // it while it is drawn - a sheathed field reads exactly as before
         ( state.sickle ? " · sickle" : "" ) +
         " · cut " + harvest.cut +
+        // the purse: what the cuts have paid in less what the sickle has
+        // spent, so the money the player holds is readable at a glance
+        " · gold " + purse.gold +
         " · buffer " + perf.buffer;
     }
   }
@@ -2637,7 +2694,15 @@ export function start() {
       renderer,
       skill,
       harvest,
+      // the purse and its table, so a harness can check the money an outcome
+      // earned rather than infer it from the readout
+      purse,
+      GOLD,
       gradeAt,
+      // the check's own two halves, so a harness can play a named grade rather
+      // than fight the frame clock to land the needle on it
+      armSkill,
+      resolveSkill,
       SKILL,
       TOUCH,
       // the fragment burst, so a harness can count what one cut threw off and
