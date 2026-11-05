@@ -54,6 +54,17 @@
         <button data-action="sickle">Sickle</button>
       </div>
 
+      <!--
+        the shop row is the bar's second control: a thumb on it opens or closes
+        the card the field's kit sits on, and the b key takes the same flip on a
+        keyboard, which is what keeps a phone and a desktop agreeing about one
+        mode rather than two
+      -->
+      <div class="row shop">
+        <span class="label">Shop</span>
+        <button data-action="shop">Shop</button>
+      </div>
+
       <div class="row rig">
         <span class="label">Elevate</span>
         <button class="hold" data-hold="1">Rise</button>
@@ -62,12 +73,90 @@
     </section>
 
     <!--
+      The hand's health. The purse counts what the cuts pay in; this bar counts
+      what they cost: a check that goes through the air takes 20 off the arm and
+      each hour that passes takes 10, so the share of the bar still standing is
+      the share of the working day left. The bar is DOM over the canvas rather
+      than a number the player has to find in the readout, which is what keeps
+      the cost of the next miss legible while the needle is still crossing the
+      track. app.js writes the fill's width as a share of the bar, so the markup
+      stays put and the bar never resizes itself. It hangs on the middle of the
+      left edge: the readout owns the lower right, the pad owns the lower right
+      at a phone width and the shop card owns the top of that same edge, so the
+      middle of it is the one stretch none of them takes.
+    -->
+    <div id="health" class="health" aria-label="The hand's health">
+      <div class="fill" id="health-fill"></div>
+    </div>
+
+    <!--
+      The shop card. The purse is a ledger rather than a score, so it can also
+      buy: the kit the field sells is priced in the very gold the cuts pay into
+      and the sickle spends from, and a purchase spends the fee through payGold
+      rather than subtracting it from a total - so a piece the purse cannot pay
+      is refused rather than debt, the same rule a swipe answers to. The ration
+      is the one row that is not kit: it is eaten rather than carried, so it
+      fills the hand rather than moving a number the field runs on, and it is
+      the only row the purse can buy more than once.
+
+      The rows are declarative here and carry only the id of the piece they sell:
+      the id on a buy button is the id app.js's EQUIPMENT table prices, equips
+      and refuses, and the price the button names is written into it from that
+      same table, so the number on the glass is the number buy() spends. The card
+      stays hidden until the Shop row on the bar (or the b key) drops the hidden
+      attribute, which is what keeps a field nobody has shopped in reading and
+      paying exactly as it did before.
+    -->
+    <div id="shop" class="shopcard" aria-label="The field shop" hidden>
+      <div class="row purse">
+        <span class="label">Purse</span>
+        <span class="coins" id="shop-purse"></span>
+      </div>
+
+      <div class="row kit">
+        <span class="name">Whetstone</span>
+        <button class="buy" data-buy="whetstone"></button>
+        <span class="note">the check's great and good bands widen</span>
+      </div>
+
+      <div class="row kit">
+        <span class="name">Blade Oil</span>
+        <button class="buy" data-buy="bladeoil"></button>
+        <span class="note">a swipe spends nothing off the purse</span>
+      </div>
+
+      <div class="row kit">
+        <span class="name">Long Snath</span>
+        <button class="buy" data-buy="snath"></button>
+        <span class="note">the ring both tools answer to grows by 1.2 m</span>
+      </div>
+
+      <div class="row kit">
+        <span class="name">Gilded Sickle</span>
+        <button class="buy" data-buy="gild"></button>
+        <span class="note">every cut pays one gold more</span>
+      </div>
+
+      <!--
+        the ration is the card's one repeatable row: it is eaten rather than
+        carried, so it moves the hand rather than a number the field runs on,
+        and a hand at the top of its day refuses it - the row answers "not
+        hungry" rather than selling a meal that would recover nothing
+      -->
+      <div class="row food">
+        <span class="name">Rice Ration</span>
+        <button class="buy" data-buy="ration"></button>
+        <span class="note">the hand recovers 40 hp</span>
+      </div>
+    </div>
+
+    <!--
       The hour has no buttons here any more: it walks itself through morning,
       afternoon and golden hour on the frame clock (one minute each by default, ?light=
       pins one). Wind, pause and the walk are keyboard-only - Shift+Arrow nudges
       the wind, Space toggles pause, k draws or sheathes the sickle, v swaps the
-      framing, and the arrow keys / WASD walk. The rig row stays because a phone
-      has no E / Q.
+      framing, b opens or closes the shop card, and the arrow keys / WASD walk. The
+      rig row stays because a phone has no E / Q.
     -->
 
     <!--
@@ -94,6 +183,18 @@
       <div class="needle" id="skill-needle"></div>
       <div class="verdict" id="skill-verdict"></div>
     </div>
+
+    <!--
+      The purse's fireworks. One layer for everything a cut answers with besides
+      its own words: the shockwave left at the point the blade went through, the
+      sparks that climb out of it and fall, and the readout a sickle swipe leaves
+      where the blade ended. The layer is pointer-transparent so it can never eat
+      the click that follows a cut, and its nodes are a fixed pool app.js reuses
+      - a cut writes transforms rather than allocating. The skill check's words
+      stay on the meter (#skill-verdict) so the harness that grades a pass still
+      reads the claim out of the markup it was promised.
+    -->
+    <div id="flair" class="flair" aria-label="The purse's fireworks" hidden></div>
 
     <!--
       The line the sickle has drawn lives here rather than in the scene: the

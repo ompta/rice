@@ -152,6 +152,172 @@ button.on {
   }
 }
 
+/* --------------------------------------------------------------- shop -- */
+/* The kit the purse buys. One fixed card in the sky rather than a row on the
+   bar: the bar stays one row deep on a desktop, and the card only arrives when
+   app.js drops the hidden attribute it owns - the stylesheet keys display on
+   that attribute, so a closed card pays the layout nothing at all. */
+.shopcard {
+  position: fixed;
+  left: 10px;
+  top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 9px;
+  border-radius: 6px;
+  background: var(--panel);
+  border: 1px solid var(--panel-line);
+  backdrop-filter: blur(6px) saturate(120%);
+  -webkit-backdrop-filter: blur(6px) saturate(120%);
+  max-width: 70vw;
+  z-index: 5;
+}
+
+.shopcard[hidden] {
+  display: none;
+}
+
+/* the piece's own name and what it does to the field: the name is the ink the
+   controls share and the note is dim, so a player reads the pieces before
+   weighing any of them. The ration row is styled with the kit rather than
+   apart from it, since on the glass a meal is offered the same way a blade is */
+.shopcard .kit .name,
+.shopcard .food .name {
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  color: var(--ink);
+  margin-right: 3px;
+}
+
+.shopcard .kit .note,
+.shopcard .food .note {
+  font-size: 8px;
+  letter-spacing: 0.03em;
+  color: var(--ink-dim);
+}
+
+/* the price app.js writes into the button from the EQUIPMENT table, so the
+   number on the glass is the number buy() spends rather than a second copy of
+   the table that can drift away from it */
+.shopcard button {
+  min-width: 44px;
+  text-align: center;
+}
+
+.shopcard button.owned {
+  /* carried: the piece is already in the hand, so the row reads as settled
+     rather than as a price the player is weighing again */
+  color: var(--ink-dim);
+  background: transparent;
+  border-color: transparent;
+  cursor: default;
+}
+
+.shopcard button.broke {
+  /* the purse cannot pay: the price stays on the glass but takes the rust the
+     error row already carries, so the refusal reads before the click lands */
+  color: #c98b5e;
+  border-color: rgba(201, 139, 94, 0.45);
+}
+
+.shopcard button.full {
+  /* the hand is at the top of its day: the ration's price stays off the glass
+     and the row answers with the refusal instead, so a meal that would recover
+     nothing never reads as one more thing to weigh */
+  color: var(--ink-dim);
+  background: transparent;
+  border-color: transparent;
+  cursor: default;
+}
+
+.shopcard button.gone {
+  /* the body has fallen: the hand has room left in its day and no hand left to
+     fill it, so the row keeps the price off the glass like a full one but wears
+     the rust rather than the dim - the meal is not one more thing to weigh, it
+     is one the player cannot reach */
+  color: #c98b5e;
+  background: transparent;
+  border-color: transparent;
+  cursor: default;
+}
+
+/* the purse line the card names, so the money the player holds is legible the
+   moment a price is weighed against it */
+.shopcard .coins {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 9px;
+  color: var(--accent);
+}
+
+/* the Shop row on the bar: same rhythm as the sickle row, and the .on state
+   app.js paints is what says the card is on the glass */
+.shop button {
+  min-width: 40px;
+  text-align: center;
+}
+
+html.touch .shopcard button {
+  /* a fingertip on a price: the same tap target the bar's own buttons take, so
+     a thumb never flips a piece it was not aimed at */
+  min-height: 32px;
+  touch-action: manipulation;
+}
+
+html.touch .shopcard {
+  /* the bar owns the bottom edge and the pad the lower right, so the card goes
+     across the top of the glass at a phone width */
+  left: 8px;
+  right: 8px;
+  top: 8px;
+}
+
+/* ------------------------------------------------------ the hand's bar -- */
+/* The working day on the glass rather than a number the player has to find in
+   the readout: a miss costs the arm and each hour that passes costs it too, so
+   the share of the bar still standing is the share of the day left. The bar is
+   fixed and the fill is a share of it, so app.js writes one width and the layout
+   never moves - the same DOM-over-the-canvas reading the meter and the drawn
+   line take. It hangs on the middle of the left edge: the readout owns the lower
+   right, the pad owns the lower right at a phone width and the shop card owns
+   the top of that same edge, so the middle of it is the one stretch none of them
+   takes. */
+.health {
+  position: fixed;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 150px;
+  height: 8px;
+  border-radius: 4px;
+  background: rgba(11, 22, 16, 0.72);
+  border: 1px solid var(--panel-line);
+  /* the bar decorates: a swipe has to cross it on its way to the field, which
+     is what keeps a spent hand's refusal from being a drag that stopped on the
+     meter instead of on the glass */
+  pointer-events: none;
+  z-index: 5;
+}
+
+.health .fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  border-radius: 3px;
+  background: var(--accent);
+  /* the hand starts at the top of its day, so the bar reads full before app.js
+     has written a width into it */
+  width: 100%;
+}
+
+.health.low .fill {
+  /* under a third of the day: the same rust the shop prices a refused piece in,
+     so the meter says the hand is tired rather than leaving the player to
+     measure the bar's edge against its frame */
+  background: #c98b5e;
+}
+
 /* ---------------------------------------------------------- touch pad -- */
 /* app.js puts .touch on <html> when a coarse pointer is detected (or when
    ?touch=1 forces it on a desktop). Every rule below is keyed on that class,
@@ -359,15 +525,44 @@ html.touch .tool button {
   box-shadow: 0 0 3px rgba(0, 0, 0, 0.65);
 }
 
+/* The claim a pass pays in. It is the popup itself: app.js parks it on the very
+   point the blade went through and walks it up the glass over the check's own
+   window, so the words read as a firework's climb rather than as a caption
+   pinned above the meter. left / top / transform are written every frame, which
+   is why nothing here sets them.
+
+   The three spans are the claim's three parts - the grade, the gold it paid, the
+   run it is in - and app.js writes them with no whitespace between, so the
+   element's textContent still concatenates to exactly "GREAT 6 Combo $8": the
+   harness that grades a pass reads the claim it was promised while the glass
+   shows a far dressed one. */
 .skill .verdict {
   position: absolute;
   left: 0;
-  bottom: 18px;
+  top: 0;
   font-family: Georgia, serif;
   font-style: italic;
   font-size: 13px;
   white-space: nowrap;
   color: var(--ink-dim);
+}
+
+.skill .verdict .word {
+  font-size: 1.06em;
+  letter-spacing: 0.02em;
+}
+
+.skill .verdict .gain {
+  font-size: 1.14em;
+  font-weight: 700;
+  color: #d8c07a;
+}
+
+.skill .verdict .run {
+  font-size: 0.86em;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--accent);
 }
 
 .skill .verdict.normal {
@@ -384,5 +579,183 @@ html.touch .tool button {
 
 .skill .verdict.fail {
   color: #ffb3a8;
+}
+
+/* ------------------------------------------------- the flair ladder ------- */
+/* The claim gets more dressed the longer the run of great cuts behind it. The
+   words never change - app.js keeps the claim exactly as the harness reads it -
+   so what grows is the typography, the light and the ornaments around it. The
+   ornaments are ::before / ::after content, which is what lets a run gain a
+   flourish without the claim's own textContent moving one character. */
+
+.skill .verdict.f1 {
+  font-size: 14px;
+  letter-spacing: 0.03em;
+  text-shadow: 0 0 4px rgba(159, 192, 106, 0.55);
+}
+
+.skill .verdict.f1 .run {
+  color: #cfe6a2;
+}
+
+.skill .verdict.f2 {
+  font-size: 15px;
+  letter-spacing: 0.045em;
+  text-shadow: 0 0 6px rgba(240, 206, 122, 0.62), 0 0 1px rgba(0, 0, 0, 0.5);
+}
+
+.skill .verdict.f2 .gain {
+  color: #f0ce7a;
+}
+
+.skill .verdict.f2 .run {
+  color: #f0ce7a;
+}
+
+.skill .verdict.f3 {
+  font-size: 16px;
+  letter-spacing: 0.06em;
+  text-shadow: 0 0 9px rgba(248, 226, 140, 0.7), 0 0 2px rgba(0, 0, 0, 0.55);
+}
+
+.skill .verdict.f3 .gain {
+  color: #f8e28c;
+}
+
+.skill .verdict.f3 .run {
+  color: #f8e28c;
+}
+
+.skill .verdict.f3::before {
+  content: "\2735\F0A0";
+  color: #f8e28c;
+  font-size: 0.7em;
+}
+
+.skill .verdict.f4 {
+  font-size: 17px;
+  letter-spacing: 0.08em;
+  text-shadow: 0 0 13px rgba(255, 240, 170, 0.82), 0 0 3px rgba(0, 0, 0, 0.6);
+}
+
+.skill .verdict.f4 .word {
+  color: #fffbe4;
+}
+
+.skill .verdict.f4 .gain {
+  color: #fff0aa;
+}
+
+.skill .verdict.f4 .run {
+  color: #fff0aa;
+}
+
+.skill .verdict.f4::before {
+  content: "\2735\F0A0\2726\F0A0";
+  color: #fff0aa;
+  font-size: 0.72em;
+}
+
+.skill .verdict.f4::after {
+  content: "\F0A0\2726";
+  color: #fff0aa;
+  font-size: 0.72em;
+}
+
+/* ------------------------------------------------------------ the flair --- */
+/* The purse's fireworks. One fixed layer over the whole glass, pointer-
+   transparent so it can never eat the click that follows a cut, and holding a
+   fixed pool of nodes app.js reuses: a cut writes transforms, it never
+   allocates. The layer is hidden while nothing is live, which is what keeps a
+   field that has never been cut free of a second compositor layer. */
+.flair {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  pointer-events: none;
+  z-index: 7;
+}
+
+/* the shockwave the blade leaves at the point it went through: a ring that
+   opens and dies, so the cut reads as an impact rather than as a vanishing
+   plant. It is a border rather than a fill so the crop under it stays visible */
+.flair .ring {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100px;
+  height: 100px;
+  margin-left: -50px;
+  margin-top: -50px;
+  border-radius: 50%;
+  border: 2px solid rgba(238, 246, 220, 0.7);
+  background: transparent;
+}
+
+.flair .ring.f1 {
+  border-color: rgba(159, 192, 106, 0.8);
+}
+
+.flair .ring.f2 {
+  border: 3px solid rgba(240, 206, 122, 0.85);
+}
+
+.flair .ring.f3 {
+  border: 3px solid rgba(248, 226, 140, 0.9);
+  box-shadow: 0 0 8px rgba(248, 226, 140, 0.5);
+}
+
+.flair .ring.f4 {
+  border: 4px solid rgba(255, 240, 170, 0.95);
+  box-shadow: 0 0 14px rgba(255, 240, 170, 0.6);
+}
+
+/* a spark: one mote of the burst. app.js parks the node on the cut point with
+   left / top and walks it with a transform, so the mote's own box never moves
+   and the compositor only ever sees a translate */
+.flair .spark {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: #eef6dc;
+}
+
+.flair .spark.f1 {
+  background: #b6d485;
+  box-shadow: 0 0 3px rgba(159, 192, 106, 0.8);
+}
+
+.flair .spark.f2 {
+  background: #f0ce7a;
+  box-shadow: 0 0 4px rgba(240, 206, 122, 0.85);
+}
+
+.flair .spark.f3 {
+  background: #f8e28c;
+  box-shadow: 0 0 5px rgba(248, 226, 140, 0.9);
+}
+
+.flair .spark.f4 {
+  background: #fff0aa;
+  box-shadow: 0 0 6px rgba(255, 240, 170, 0.95);
+}
+
+/* the swipe's own readout: the sickle spends rather than pays, so it answers
+   with the plants it took rather than with a grade, and it never climbs the
+   ladder - a swathe is a swathe */
+.flair .swipe {
+  position: absolute;
+  left: 0;
+  top: 0;
+  font-family: Georgia, serif;
+  font-style: italic;
+  font-size: 12px;
+  white-space: nowrap;
+  color: #cfe0c2;
+  text-shadow: 0 0 3px rgba(0, 0, 0, 0.6);
 }
 

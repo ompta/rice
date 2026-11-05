@@ -31,6 +31,20 @@
 //   purse         a cut pays the field: 1 gold for a normal cut, 2 for a good
 //                 one, 3 for a great one, and every sickle swipe begun takes
 //                 1 gold off the purse
+//   combo         great cuts landed back to back are a run: the run is counted
+//                 on the verdict and in the readout, and each great after the
+//                 first pays one gold more than the table until the cut is
+//                 worth 10 and stops growing
+//   shop          the purse buys: a card on the glass sells the field's own
+//                 kit - a whetstone, blade oil, a longer snath, a gilded
+//                 sickle - and a purchase spends the fee off the purse the
+//                 same way a swipe does, so a piece the purse cannot pay is
+//                 refused rather than debt
+//   flair         a cut answers at the point the blade went through: a shockwave
+//                 opens there, a fan of sparks climbs out of it and falls back,
+//                 and the claim itself lifts off the cut and dies a capped
+//                 height above it - the whole answer dressed by the run, so a
+//                 deep one reads grander than the nick that opened it
 //
 // Nothing is loaded: every geometry and material here is procedural, so the
 // page's only dependency is three.js itself, which index.html's import map
@@ -100,6 +114,16 @@ export const params = (() => {
     // 1 = start with the sickle already drawn, so a harness can drive a swipe
     // without first clicking the panel
     sickle: num( "sickle", 0 ) > 0,
+    // 1 = open the shop card at start, so a harness can price a purchase without
+    // first clicking the bar
+    shop: num( "shop", 0 ) > 0,
+    // how far the hand works, in metres: the radius of the ring around the
+    // player inside which either tool cuts. Two metres is arm's length, which
+    // is what makes the stand the player is standing in the stand that gets
+    // cut rather than the whole field. ?reach= moves the ring - a harness that
+    // is about something other than the reach pins it wide so the ring never
+    // quietly decides its result
+    reach: num( "reach", 2 ),
   };
 })();
 
@@ -666,6 +690,43 @@ export const field = { tiers: [], instances: 0, triangles: 0 };
 export const hover = { tier: -1, index: -1, height: 0, x: -1, y: -1, radius: 13 };
 
 // ---------------------------------------------------------------------------
+// The arm's reach: the ring around the player both tools answer to. A check
+// only arms on a plant the hand can touch, and a swipe only takes the plants
+// inside the same ring, so a line drawn across the whole glass reaps the swathe
+// nearest the player rather than the whole stand, and a click on a plant
+// further away than the arm is not a wasted check - it arms nothing at all.
+//
+// The ring is measured in the field plane from the player's own seat rather
+// than from the eye: the eye sits a head above the ground, so a plant two
+// metres out is two metres out whatever the framing's height is. Measuring to
+// the eye instead would make the reach quietly grow every time the eye got
+// higher, which is what the open framing would do - and the two framings would
+// disagree about how far the same hand is.
+//
+// The hover pick deliberately stays outside this rule: a viewer can outline and
+// inspect a plant anywhere in the field, and only the two tools that cut answer
+// to the ring.
+// ---------------------------------------------------------------------------
+export const REACH = Math.max( 0, params.reach ); // metres; ?reach= moves the ring
+
+// the ring as the hand actually works it: REACH is the bare arm and stays put
+// so a harness can read the ring it was told, while hand.reach is what the ring
+// became once anything that lengthens it is carried. Both tools and the readout
+// answer to hand.reach, so the ring a click cuts on is the ring the readout
+// names rather than one the viewer has to guess.
+export const hand = { reach: REACH, reach2: REACH * REACH };
+
+// squared metres from the player's seat to a point on the field. The camera is
+// the player: walking moves it, and the ring walks with it. Squared because
+// both callers ask only "inside or outside", and the reap asks it of every
+// plant in the stand on every pointer move.
+export function fromPlayerD2( x, z ) {
+  const dx = x - camera.position.x;
+  const dz = z - camera.position.z;
+  return dx * dx + dz * dz;
+}
+
+// ---------------------------------------------------------------------------
 // Skill check: clicking a plant arms a Dead by Daylight style meter - a needle
 // sweeps the track left to right and the next click plays it. Where the needle
 // happens to be decides the grade, and every pass cuts the plant.
@@ -691,6 +752,17 @@ export const SKILL = {
   verdict: 0.9, // seconds the verdict stays on screen
 };
 
+// the check's bands as the whetstone leaves them: SKILL.bands is the bare table
+// a harness was told and stays put, while bands is what the meter is drawn and
+// graded with. Keeping the two apart is what lets a honed blade widen the target
+// the player aims at without moving the table anything is measured against, and
+// with nothing carried the two are the same three numbers
+export const bands = {
+  great: SKILL.bands.great,
+  good: SKILL.bands.good,
+  normal: SKILL.bands.normal,
+};
+
 export const harvest = { cut: 0, great: 0, good: 0, normal: 0, fail: 0 };
 
 // ---------------------------------------------------------------------------
@@ -710,12 +782,39 @@ export const harvest = { cut: 0, great: 0, good: 0, normal: 0, fail: 0 };
 // ---------------------------------------------------------------------------
 export const GOLD = { normal: 1, good: 2, great: 3, sickle: 1 };
 
+// the run: great cuts landed back to back are a combo rather than a count of
+// cuts, so the grade that keeps a run going is named here, and so is the most
+// one cut can pay - table value and bonus together. The cap is what keeps a
+// long run from turning the field into a coin farm: the run still reads, it
+// just stops buying.
+export const COMBO = { grade: "great", cap: 10 };
+
 export const purse = { earned: 0, spent: 0, unpaid: 0, gold: 0 };
 
-// what a grade is worth, 0 for a grade the table does not name (a miss)
+// the run as it stands: streak is how many great cuts in a row the player has
+// just landed, and it goes back to 0 the moment anything else lands - a good
+// cut, a normal one, a miss, or a meter left to expire. best is the longest run
+// this session reached, kept apart from the streak so a harness can tell a run
+// that grew to three from one that was broken and started again
+export const combo = { streak: 0, best: 0 };
+
+// what a grade is worth, 0 for a grade the table does not name (a miss).
+// The run is counted before the value is read, so the great that opens a run
+// pays the table's 3 and every great after it pays one gold more than the one
+// before it - 3, 4, 5 ... - until the cut is worth COMBO.cap and stops growing.
+// A grade that is not great lands in the run's place and ends it, which is what
+// makes the bonus something to aim for rather than free money
 export function earnGold( grade ) {
-  const value = GOLD[ grade ] !== undefined ? GOLD[ grade ] : 0;
-  if ( value <= 0 ) return 0;
+  const base = GOLD[ grade ] !== undefined ? GOLD[ grade ] : 0;
+  if ( grade === COMBO.grade ) combo.streak = combo.streak + 1;
+  else combo.streak = 0;
+  if ( combo.streak > combo.best ) combo.best = combo.streak;
+  if ( base <= 0 ) return 0;
+  const bonus = grade === COMBO.grade ? combo.streak - 1 : 0;
+  // the cap settles what the run buys; the gild is a flat addition to the cut
+  // rather than to the run, so a capped cut still pays more once the blade is
+  // gilded and the same capped cut with nothing carried reads as it did before
+  const value = Math.min( base + bonus, COMBO.cap ) + gear.pay;
   purse.earned = purse.earned + value;
   purse.gold = purse.earned - purse.spent;
   return value;
@@ -732,6 +831,537 @@ export function payGold( amount ) {
   return paid;
 }
 
+// ---------------------------------------------------------------------------
+// The hand's health. The purse counts what the cuts pay in; the hand counts what
+// they cost. A working day is not endless: a check that goes through the air
+// costs the arm 20 - the swing was made and nothing was cut - and each hour that
+// passes costs it 10, which is what makes standing in the sun a decision rather
+// than free time. The meter is a bar on the glass rather than a number the
+// player has to find in the readout, so the cost of the next miss is legible
+// while the needle is still crossing the track.
+//
+// HP is the bare table a harness was told and stays put; health.hp is what the
+// hand actually holds, and lost / restored are the two sides of that ledger -
+// the same shape the purse keeps its money in. Nothing here is a stat the field
+// invents: every number is a cost one of the field's own outcomes already pays.
+//
+// A hand at 0 is not the bottom of a bar - it is the end of the player. Neither
+// tool works (the check refuses to arm and the blade refuses to swing), and the
+// body falls: this page has no player model to animate, so the eye is the body
+// and the fall is the camera's own move rather than an animation on a model
+// there is none of. Nothing lifts a fallen body back up - the hour's rest rests
+// an arm that is still standing and a meal needs a hand to hold it - so the
+// hour takes from and gives to a body on the ground nothing at all, the sky
+// walks over it, and the only way back to a standing player is a fresh page.
+// ---------------------------------------------------------------------------
+export const HP = { max: 100, fail: 20, hour: 10, rest: 10, recover: 40, low: 30 };
+
+// the hand as it stands: hp is what is left of the day, lost and restored are
+// the two sides of that ledger, hurtAt / healedAt are when the last of each
+// happened so a harness can tell a fresh cost from a stale one, and dead / fall
+// say whether the day has come out of the hand for good and how far through the
+// collapse the eye is
+export const health = { hp: HP.max, lost: 0, restored: 0, hurtAt: -1, healedAt: -1, dead: false, fall: 0 };
+
+// take the cost of an outcome off the hand, floored at 0: a hand cannot owe
+// health, which is the same reason a purse cannot read "-2 gold". lost counts
+// what was really taken rather than what was asked for, so a miss that lands
+// on a hand with 10 left costs that 10 and closes the ledger at the day's length
+export function hurt( amount ) {
+  const before = health.hp;
+  health.hp = Math.max( 0, health.hp - amount );
+  health.lost = health.lost + ( before - health.hp );
+  health.hurtAt = performance.now();
+  // the last of the day is not the bottom of a bar: the player falls, and the
+  // eye falls with him
+  if ( health.hp <= 0 ) downPlayer();
+  paintHealth();
+}
+
+// give it back, capped at the day's length: a hand that has rested past full
+// recovers nothing further, which is what lets the ration's 40 land as 30 when
+// only 30 was missing. A fallen body is left out before any of that: the hour's
+// rest rests an arm that is still standing and a meal needs a hand to hold it,
+// so neither answers a body that is lying in the mud
+export function heal( amount ) {
+  if ( health.dead ) return;
+  const before = health.hp;
+  health.hp = Math.min( HP.max, health.hp + amount );
+  health.restored = health.restored + ( health.hp - before );
+  health.healedAt = performance.now();
+  paintHealth();
+}
+
+// the day has come out of the hand for good. The walk is taken away rather than
+// a new flag invented for it: state.walk is the one gate both the move keys and
+// the drag look already answer to, so a body face-up in the mud neither walks
+// nor turns its head and the state readout says so on its own
+export function downPlayer() {
+  if ( health.dead ) return;
+  health.dead = true;
+  state.walk = false;
+}
+
+// the hour the field stepped into: a working hand pays for it, a spent one rests
+// and a fallen body takes the hour from neither - the sky walks over it either
+// way, which is what keeps a collapse from reading as the field stopping
+export function passHour() {
+  if ( health.hp <= 0 ) heal( HP.rest );
+  else hurt( HP.hour );
+}
+
+// the meter on the glass: the fill is a share of the bar rather than a bar of
+// its own width, so app.js writes one number and the layout never moves
+const healthNodes = { bar: null, fill: null };
+
+export function paintHealth() {
+  const bar = healthNodes.bar || ( healthNodes.bar = document.getElementById( "health" ) );
+  if ( !bar ) return;
+  const fill = healthNodes.fill || ( healthNodes.fill = document.getElementById( "health-fill" ) );
+  if ( !fill ) return;
+  fill.style.width = Math.round( 100 * ( health.hp / HP.max ) ) + "%";
+  // a hand under a third of its day wears the same rust the shop prices a
+  // refused piece in, so the meter answers the field rather than the player.
+  // A spent hand is left out: its bar is empty rather than rusted, which is
+  // what keeps an empty bar from reading as two different things
+  bar.classList.toggle( "low", health.hp > 0 && health.hp <= HP.low );
+}
+
+// ---------------------------------------------------------------------------
+// The shop. The purse is a ledger rather than a score, so it can also buy: a
+// card on the glass sells the field's own kit, each piece priced in the very
+// gold the cuts pay into and the sickle spends from. A purchase spends its fee
+// through payGold rather than subtracting it from a total, so a piece the purse
+// cannot pay is refused rather than debt - the same rule a swipe answers to -
+// and the refusal is named in the readout for as long as it is fresh, which is
+// what keeps a refused click from reading as a dead button.
+//
+// Nothing here is a stat the field invents. Each piece moves one number the
+// field already has: the whetstone widens the bands the check grades on, the
+// oil drops the fee a swipe spends, the snath moves the ring both tools answer
+// to, the gild pays more per cut. With nothing carried every one of those
+// numbers is the bare table it was told, which is what keeps the harnesses that
+// grade a pass or read the ledger honest.
+// ---------------------------------------------------------------------------
+export const EQUIPMENT = [
+  { id: "whetstone", name: "Whetstone", cost: 6, note: "the check's great and good bands widen" },
+  { id: "bladeoil", name: "Blade Oil", cost: 8, note: "a swipe spends nothing off the purse" },
+  { id: "snath", name: "Long Snath", cost: 10, note: "the ring both tools answer to grows by 1.2 m" },
+  { id: "gild", name: "Gilded Sickle", cost: 16, note: "every cut pays one gold more" },
+  // the ration is the one row that can be bought again: it is eaten rather than
+  // carried, so it moves the hand rather than a number the field runs on. Its
+  // cost is a meal's, weighed against the 20 a miss already costs the arm
+  { id: "ration", name: "Rice Ration", cost: 12, consumable: true, recover: HP.recover, note: "the hand recovers 40 hp" },
+];
+
+// the same table keyed by id, so a click on a row's button finds its price by
+// the id the row carries rather than by its position in a list
+export const EQUIPMENT_BY_ID = (() => {
+  const byId = {};
+  for ( const item of EQUIPMENT ) byId[ item.id ] = item;
+  return byId;
+})();
+
+// the shop's own ledger: open is whether the card is on the glass, owned is
+// what the player is carrying (a piece is carried once, never twice), bought
+// counts the carried pieces for the readout, refusedAt is when a piece the purse
+// could not pay was last asked for, eaten counts the meals the purse paid for -
+// kept apart from bought, since a ration fills the hand rather than moving a
+// number the field runs on - fullAt is when a ration was asked for with a hand
+// that had nothing left to fill, and goneAt is when one was asked for by a body
+// that has fallen: the hand has room left in its day and no hand left to fill it
+export const shop = { open: params.shop, owned: {}, bought: 0, refusedAt: -1, eaten: 0, fullAt: -1, goneAt: -1 };
+
+// the numbers the carried kit moves: fee is what starting a swipe spends off
+// the purse and pay is the gold every cut pays on top of the table. Both start
+// at the bare value, so a field with nothing carried runs the bare rule
+export const gear = { fee: GOLD.sickle, pay: 0 };
+
+// what a carried piece does to the field's own numbers. Each branch writes the
+// live holder rather than the bare table, so REACH / SKILL.bands / GOLD stay
+// exactly what a harness was told and only the values the field runs on move.
+// The whetstone widens the two inner bands only and keeps them inside the
+// normal one, which is what keeps the three nested bands honest
+export function equip( id ) {
+  if ( id === "whetstone" ) {
+    bands.great = SKILL.bands.great * 1.6;
+    bands.good = SKILL.bands.good * 1.4;
+    return true;
+  }
+  if ( id === "bladeoil" ) {
+    gear.fee = 0;
+    return true;
+  }
+  if ( id === "snath" ) {
+    hand.reach = REACH + 1.2;
+    hand.reach2 = hand.reach * hand.reach;
+    return true;
+  }
+  if ( id === "gild" ) {
+    gear.pay = 1;
+    return true;
+  }
+  return false;
+}
+
+// buy one row by the id it carries: false for a row the table does not name, one
+// already carried, a ration eaten into a full hand, or one the purse cannot pay.
+// A ration is the only row that can go through more than once, since eating it
+// fills the hand rather than carrying a piece - and buying one with a full day
+// left recovers nothing, so it is refused rather than paid for, which is what
+// keeps a meal from being money spent on nothing
+export function buy( id ) {
+  const item = EQUIPMENT_BY_ID[ id ];
+  if ( !item ) return false;
+  if ( item.consumable === true ) {
+    // a fallen body is refused before the fee is paid rather than after: money
+    // spent on a meal nothing can eat is money thrown away
+    if ( health.dead ) {
+      shop.goneAt = performance.now();
+      return false;
+    }
+    if ( health.hp >= HP.max ) {
+      shop.fullAt = performance.now();
+      return false;
+    }
+  } else if ( shop.owned[ id ] === true ) return false;
+  if ( purse.gold < item.cost ) {
+    shop.refusedAt = performance.now();
+    return false;
+  }
+  payGold( item.cost );
+  // a meal is eaten rather than carried, so it leaves the ledger of carried kit
+  // alone: the hand is what moves, and the hand's own ledger counts it
+  if ( item.consumable === true ) {
+    shop.eaten = shop.eaten + 1;
+    heal( item.recover );
+    return true;
+  }
+  shop.owned[ id ] = true;
+  shop.bought = shop.bought + 1;
+  equip( item.id );
+  return true;
+}
+
+// the card on the glass: the Shop row's button and the b key take the same flip,
+// so a thumb and a keyboard cannot disagree about whether the kit is showing.
+// The hidden attribute is what the stylesheet keys display on, so dropping it
+// is the whole open and a closed card pays the layout nothing
+let shopButton = null;
+
+// the card's own purse line, remembered rather than looked up every frame: the
+// money the player holds walks on the readout's clock, so a price weighed
+// against it is the purse as of now rather than as of the last purchase
+let shopCoins = null;
+
+export function setShop( v ) {
+  shop.open = v === true || v === 1 || v === "on" || v === "true" || v === "1";
+  if ( shopButton ) shopButton.classList.toggle( "on", shop.open );
+  const card = document.getElementById( "shop" );
+  if ( card ) {
+    if ( shop.open ) card.removeAttribute( "hidden" );
+    else card.setAttribute( "hidden", "" );
+  }
+  paintShop();
+}
+
+// the rows read the ledger they are priced against, so the price a button names
+// is the price buy() spends and the purse line is what the player holds now.
+// A carried piece answers with the word rather than with a price, a piece the
+// purse cannot pay keeps its price but takes the broke class, and a ration takes
+// the full class when the hand has nothing left to fill - which is what makes
+// each refusal legible before the click rather than after it
+export function paintShop() {
+  if ( !shopCoins ) shopCoins = document.getElementById( "shop-purse" );
+  if ( shopCoins ) shopCoins.textContent = purse.gold + " gold";
+  for ( const node of document.querySelectorAll( "[data-buy]" ) ) {
+    const id = node.getAttribute( "data-buy" );
+    const item = EQUIPMENT_BY_ID[ id ];
+    if ( !item ) continue;
+    // a ration is eaten rather than carried, so its row never answers "carried":
+    // it keeps its price for as long as the hand has room left to fill, and
+    // answers the refusal when it does not
+    if ( item.consumable === true ) {
+      // a fallen body has room left in its day and no hand left to fill it, so
+      // the row answers a different refusal rather than the one a full hand
+      // gives: the price stays off the glass either way, but the word says why
+      const gone = health.dead;
+      const full = !gone && health.hp >= HP.max;
+      node.classList.toggle( "gone", gone );
+      node.classList.toggle( "full", full );
+      node.classList.toggle( "broke", !gone && !full && purse.gold < item.cost );
+      node.textContent = gone ? "no hand" : full ? "not hungry" : item.cost + " gold";
+      continue;
+    }
+    if ( shop.owned[ id ] === true ) {
+      node.classList.toggle( "owned", true );
+      node.classList.toggle( "broke", false );
+      node.textContent = "carried";
+      continue;
+    }
+    node.classList.toggle( "owned", false );
+    node.classList.toggle( "broke", purse.gold < item.cost );
+    node.textContent = item.cost + " gold";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The purse made visible. A cut does not only pay - it answers, and it answers
+// at the very point the blade went through: a shockwave opens on the glass
+// there, a burst of sparks climbs out of it and falls back under gravity, and
+// the claim itself lifts off the cut and dies a limited height above it. The
+// climb is capped on purpose - a firework's rocket rises and settles, it does
+// not fly off the glass - and the whole answer dies on the check's own window,
+// so the burst and the words the meter pays in are one beat rather than two
+// clocks that can drift apart.
+//
+// The run decides how dressed the answer is. A lone nick is a nick; a run of
+// great cuts earns more motes, a hotter colour, a wider fan and a bigger
+// flourish, so the field's own reward is legible the moment a player is deep
+// enough in one to want to know it. The words never change - the claim stays
+// exactly what the harnesses read back - so what grows is the typography, the
+// light and the ornaments around it.
+//
+// Everything here is DOM rather than geometry: the burst belongs to the glass,
+// it must never eat the click that follows a cut, and it has to survive a
+// paused field exactly as the meter does. The nodes are a fixed pool built once
+// and reused - a cut writes transforms, it allocates nothing - and the layer
+// stays hidden while nothing is live, so a field that has never been cut pays
+// no compositor anything.
+// ---------------------------------------------------------------------------
+export const FLAIR = {
+  life: SKILL.verdict, // seconds a burst lives: the check's own window, so the
+                       // sparks and the claim die on one clock
+  rise: 104, // px of climb for the claim: limited, which is what makes it a
+             // firework's rise rather than a caption walking off the glass
+  pop: 0.3, // share of the life the claim spends punching in
+  fade: 0.72, // share of the life it holds before starting to fade out
+  ringLife: 0.34, // seconds the shockwave takes to open and die
+  sparks: [ 5, 9, 13, 18, 24 ], // motes per tier: the fan grows with the run
+  fan: [ 44, 62, 80, 98, 122 ], // px of reach per tier
+  ring: [ 30, 44, 58, 74, 92 ], // px of shockwave per tier
+  // px/s of upward throw per tier. The fan's own width is what makes a run read
+  // wider rather than taller, so the throw is a ladder of its own: the bare
+  // cut's sparks have to clear the head they came out of rather than sit on it
+  // as a puff, and a deep run's have to clear the claim that is already climbing
+  lift: [ 120, 165, 210, 255, 300 ],
+  pool: 24, // motes the one layer carries: the top tier's fan, so one burst
+            // owns the pool whole and a cut never recycles a live mote
+  arc: 1.3, // how far past the cut a mote falls by the end of its climb: the
+            // parabola below peaks at a third of the burst and lets the motes
+            // drop under the cut they came out of, which is what reads as a
+            // firework rather than as a spray that only ever went up
+};
+
+// the claim's climb is a decelerating lift - it leaves the cut fast and settles
+// into place. The curve has to be monotone: the punch easing below starts below
+// 1 and would drag the claim under the cut it landed on
+const flairClimb = ( p ) => 1 - ( 1 - p ) * ( 1 - p );
+
+// the run's own ladder: 0 is a nick, 4 is a run that has topped out. The grade
+// sets the floor - a miss never dresses, a good cut earns one step - and the
+// streak decides the rest, which is what keeps the flourish something a player
+// is rewarded for rather than something every cut wears
+export function flairTier( grade, streak ) {
+  if ( grade === "fail" || grade === "normal" ) return 0;
+  if ( grade === "good" ) return 1;
+  if ( streak <= 1 ) return 1;
+  if ( streak <= 3 ) return 2;
+  if ( streak <= 6 ) return 3;
+  return 4;
+}
+
+// the burst as it stands. Ages and poses live in flat arrays so a cut costs no
+// allocation, exactly as the fragment pool does
+export const flair = {
+  live: 0, // motes on screen right now
+  tier: 0, // the tier the last burst wore
+  at: -1, // when the last burst was asked for, -1 before the first cut
+  lastAt: -1, // when the burst was last walked, so the step takes a wall gap
+  swipe: -1, // plants the last swipe took, -1 while no swipe is answering
+  alive: null,
+  age: null,
+  life: null,
+  vx: null, // px/s of sideways throw at the moment of the burst
+  vy: null, // px/s of upward throw, before gravity takes it back
+  size: null,
+};
+
+// the nodes the pool owns, kept apart from the numbers above so the state a
+// harness reads stays plain JSON
+const flairNodes = { layer: null, ring: null, swipe: null, spark: null };
+
+// the pool is built once, at start rather than at the first cut, so the first
+// pass through the field answers the same way the hundredth one does
+export function buildFlair() {
+  const layer = document.getElementById( "flair" );
+  if ( !layer ) return;
+  flairNodes.layer = layer;
+  layer.hidden = true;
+
+  flairNodes.ring = document.createElement( "div" );
+  flairNodes.ring.className = "ring";
+  flairNodes.ring.style.display = "none";
+  layer.appendChild( flairNodes.ring );
+
+  flairNodes.swipe = document.createElement( "div" );
+  flairNodes.swipe.className = "swipe";
+  flairNodes.swipe.style.display = "none";
+  layer.appendChild( flairNodes.swipe );
+
+  flairNodes.spark = new Array( FLAIR.pool );
+  for ( let i = 0; i < FLAIR.pool; i++ ) {
+    const mote = document.createElement( "div" );
+    mote.className = "spark";
+    mote.style.display = "none";
+    layer.appendChild( mote );
+    flairNodes.spark[ i ] = mote;
+  }
+
+  flair.alive = new Uint8Array( FLAIR.pool );
+  flair.age = new Float32Array( FLAIR.pool );
+  flair.life = new Float32Array( FLAIR.pool );
+  flair.vx = new Float32Array( FLAIR.pool );
+  flair.vy = new Float32Array( FLAIR.pool );
+  flair.size = new Float32Array( FLAIR.pool );
+}
+
+// arm a burst at a point on the glass. tier picks how dressed it is; swipe is
+// the plants a sickle took, or -1 when the burst belongs to a skill check and
+// the claim is already being paid by the meter
+export function spawnFlair( x, y, tier, swipe ) {
+  const layer = flairNodes.layer;
+  if ( !layer ) return;
+  const now = performance.now();
+  const t = tier < 0 ? 0 : tier > 4 ? 4 : tier;
+  flair.tier = t;
+  flair.at = now;
+  flair.lastAt = now;
+  flair.swipe = swipe;
+  layer.hidden = false;
+
+  const ring = flairNodes.ring;
+  ring.className = "ring f" + t;
+  ring.style.left = x.toFixed( 0 ) + "px";
+  ring.style.top = y.toFixed( 0 ) + "px";
+
+  const n = FLAIR.sparks[ t ];
+  const reach = FLAIR.fan[ t ];
+  const lift = FLAIR.lift[ t ];
+  for ( let i = 0; i < FLAIR.pool; i++ ) {
+    const mote = flairNodes.spark[ i ];
+    if ( i >= n ) {
+      flair.alive[ i ] = 0;
+      mote.style.display = "none";
+      continue;
+    }
+    // the fan is a firework's own shape: motes thrown up and out from the cut,
+    // spread round the upper half so the burst reads as a crown rather than as
+    // a random spray, and thrown harder the deeper the run
+    const u = n > 1 ? i / ( n - 1 ) : 0.5;
+    const a = Math.PI * ( 0.06 + 0.88 * u );
+    const power = reach * ( 0.66 + 0.34 * Math.random() );
+    flair.alive[ i ] = 1;
+    flair.age[ i ] = 0;
+    flair.life[ i ] = FLAIR.life * ( 0.6 + 0.4 * Math.random() );
+    flair.vx[ i ] = Math.cos( a ) * power;
+    flair.vy[ i ] = -Math.sin( a ) * lift * ( 0.72 + 0.5 * Math.random() );
+    flair.size[ i ] = 0.7 + 0.6 * Math.random();
+    mote.className = "spark f" + t;
+    mote.style.left = x.toFixed( 0 ) + "px";
+    mote.style.top = y.toFixed( 0 ) + "px";
+    mote.style.display = "";
+  }
+
+  const claim = flairNodes.swipe;
+  if ( swipe >= 0 ) {
+    claim.className = "swipe f" + t;
+    claim.textContent = swipe + ( swipe === 1 ? " plant" : " plants" );
+    claim.style.left = x.toFixed( 0 ) + "px";
+    claim.style.top = y.toFixed( 0 ) + "px";
+    claim.style.display = "";
+  } else {
+    claim.textContent = "";
+    claim.style.display = "none";
+  }
+}
+
+// walk the burst: a mote climbs, gravity takes it back down, and it thins out
+// as it goes, which is what a spark reads as rather than as a dot on a wire
+export function stepFlair( now ) {
+  const layer = flairNodes.layer;
+  if ( !layer || layer.hidden ) return;
+  const dt = flair.lastAt >= 0 ? Math.min( 0.06, Math.max( 0, ( now - flair.lastAt ) / 1000 ) ) : 0;
+  flair.lastAt = now;
+
+  let live = 0;
+  for ( let i = 0; i < FLAIR.pool; i++ ) {
+    if ( flair.alive[ i ] === 0 ) continue;
+    flair.age[ i ] += dt;
+    const a = flair.age[ i ];
+    const l = flair.life[ i ];
+    const mote = flairNodes.spark[ i ];
+    if ( a >= l ) {
+      flair.alive[ i ] = 0;
+      mote.style.display = "none";
+      continue;
+    }
+    const u = a / l;
+    const dx = flair.vx[ i ] * a;
+    // the mote's own parabola, normalised to the burst rather than to a
+    // gravity constant: it peaks at a third of the way through its life and
+    // drops under the cut it came out of by the end, so the fan reads as a
+    // firework rather than as a spray that only ever went up
+    const dy = flair.vy[ i ] * a * ( 1 - FLAIR.arc * a );
+    const s = flair.size[ i ] * ( 1 - u * 0.55 );
+    mote.style.transform = "translate(" + dx.toFixed( 1 ) + "px," + dy.toFixed( 1 ) + "px) scale(" + s.toFixed( 3 ) + ")";
+    mote.style.opacity = ( u < 0.58 ? 1 : 1 - ( u - 0.58 ) / 0.42 ).toFixed( 3 );
+    live++;
+  }
+  flair.live = live;
+
+  // the shockwave opens fast and settles, so the cut reads as an impact rather
+  // than as a plant that simply stopped being there
+  const ring = flairNodes.ring;
+  const rt = ( now - flair.at ) / ( FLAIR.ringLife * 1000 );
+  if ( rt >= 1 ) {
+    ring.style.display = "none";
+  } else {
+    const e = 1 - ( 1 - rt ) * ( 1 - rt );
+    const k = 0.12 + ( FLAIR.ring[ flair.tier ] / 100 ) * e;
+    ring.style.display = "";
+    ring.style.transform = "scale(" + k.toFixed( 3 ) + ")";
+    ring.style.opacity = ( 1 - rt ).toFixed( 3 );
+  }
+
+  // the swipe's readout climbs on the same capped arc the claim does, so the
+  // sickle's answer and the check's answer rise at the same rate
+  if ( flair.swipe >= 0 ) {
+    const claim = flairNodes.swipe;
+    const c = Math.min( 1, ( now - flair.at ) / ( FLAIR.life * 1000 ) );
+    const climb = FLAIR.rise * flairClimb( c );
+    claim.style.transform = "translate(-50%,-50%) translateY(" + ( -climb ).toFixed( 1 ) + "px)";
+    claim.style.opacity = ( c < FLAIR.fade ? 1 : 1 - ( c - FLAIR.fade ) / ( 1 - FLAIR.fade ) ).toFixed( 3 );
+  }
+
+  // one clock settles the whole layer: every mote, the ring and the swipe
+  // readout die inside FLAIR.life, so past it there is nothing left to paint
+  if ( now - flair.at >= FLAIR.life * 1000 ) {
+    flair.at = -1;
+    flair.live = 0;
+    flair.swipe = -1;
+    flair.lastAt = -1;
+    layer.hidden = true;
+    flairNodes.ring.style.display = "none";
+    flairNodes.swipe.style.display = "none";
+    flairNodes.swipe.textContent = "";
+    // the motes go out with the layer rather than staying displayed under a
+    // hidden parent, so a harness that counts what is showing counts nothing
+    // once the burst is over
+    for ( let i = 0; i < FLAIR.pool; i++ ) flairNodes.spark[ i ].style.display = "none";
+  }
+}
+
 export const skill = {
   active: false,
   tier: -1,
@@ -745,20 +1375,42 @@ export const skill = {
   last: "", // "" | fail | normal | good | great
   gold: 0, // the money the last pass paid in, 0 for a miss
   verdictAt: -1, // when the last verdict was shown, -1 before the first check
+  // when the last click the ring refused landed, -1 before the first refusal.
+  // A click on a plant the hand cannot reach arms no meter and spends no check,
+  // so the refusal is the only outcome that would otherwise read as a dead
+  // cursor - the corner readout names it for as long as the click is fresh
+  farAt: -1,
 };
 
 // the grade is a distance from the zone centre against the nested bands, so
 // one subtraction decides all four variants
 export function gradeAt( pos ) {
   const d = Math.abs( pos - skill.zone );
-  if ( d <= SKILL.bands.great ) return "great";
-  if ( d <= SKILL.bands.good ) return "good";
-  if ( d <= SKILL.bands.normal ) return "normal";
+  if ( d <= bands.great ) return "great";
+  if ( d <= bands.good ) return "good";
+  if ( d <= bands.normal ) return "normal";
   return "fail";
 }
 
 export function armSkill() {
+  // a spent hand: the check does not arm, so no meter appears, no check is
+  // spent and nothing is cut. The readout names the hand as down rather than
+  // leaving the click on it to read as a dead cursor
+  if ( health.hp <= 0 ) return;
   if ( hover.tier < 0 ) return; // nothing under the cursor: nothing to check
+  // the ring: a plant the hand cannot touch is outlined for inspection but
+  // never armed, so a click there spends nothing and no meter appears. The
+  // root is what is measured - the same point the reap measures - so the check
+  // and the blade agree on which plants the player is standing in
+  const held = field.tiers[ hover.tier ];
+  const o = hover.index * 16;
+  if ( fromPlayerD2( held.instanceMatrix.array[ o + 12 ], held.instanceMatrix.array[ o + 14 ] ) > hand.reach2 ) {
+    // the plant is outlined but the hand is not near it: no meter, no check
+    // spent, nothing cut - and the readout says so rather than leaving the
+    // viewer to wonder whether the click did anything
+    skill.farAt = performance.now();
+    return;
+  }
   skill.active = true;
   skill.tier = hover.tier;
   skill.index = hover.index;
@@ -766,8 +1418,8 @@ export function armSkill() {
   skill.y = hover.y;
   // the zone centre stays a whole normal band plus the lead in from both ends,
   // which is what makes an instant click a guaranteed miss
-  const span = 1 - 2 * ( SKILL.bands.normal + SKILL.lead );
-  skill.zone = SKILL.bands.normal + SKILL.lead + Math.random() * span;
+  const span = 1 - 2 * ( bands.normal + SKILL.lead );
+  skill.zone = bands.normal + SKILL.lead + Math.random() * span;
   skill.needle = 0;
   skill.startedAt = performance.now();
 }
@@ -779,6 +1431,10 @@ export function resolveSkill() {
   // the money the pass paid in, kept on the check so the verdict can name it.
   // A miss is not in the table, so it earns nothing and the verdict stays bare
   skill.gold = earnGold( grade );
+  // the purse answers at the very point the blade went through, dressed by the
+  // run this cut just landed in - earnGold above already settled the streak, so
+  // the tier reads the run the player actually has rather than the one before it
+  spawnFlair( skill.x, skill.y, flairTier( grade, combo.streak ), -1 );
   skill.verdictAt = performance.now();
   skill.active = false;
   harvest[ grade ] = harvest[ grade ] + 1;
@@ -789,6 +1445,10 @@ export function resolveSkill() {
     playSound( grade === "great" ? SOUND.great : SOUND.normal, grade );
   } else {
     playSound( SOUND.hurt, grade );
+    // the swing was made and nothing was cut, so the arm paid for it. The cost
+    // is the bare table's, so a honed blade or a gilded one changes what a miss
+    // is worth to the purse rather than what it costs the hand
+    hurt( HP.fail );
   }
 }
 
@@ -940,6 +1600,12 @@ function writeFxMatrix( i, shrink ) {
 let meterNode = null;
 let meterVerdict = null;
 
+// the claim's three spans, looked up once and kept: paintMeter runs every frame,
+// and the spans are made on the first verdict that lands and reused after it
+let verdictWord = null;
+let verdictGain = null;
+let verdictRun = null;
+
 // the meter advances on the wall clock rather than on perf.simTime, so a paused
 // field still plays the check - pausing holds the environment, not the UI
 export function stepSkill( now ) {
@@ -976,7 +1642,7 @@ function paintMeter( now ) {
   for ( const key of [ "normal", "good", "great" ] ) {
     const band = document.getElementById( "skill-" + key );
     if ( !band ) continue;
-    const half = SKILL.bands[ key ];
+    const half = bands[ key ];
     band.style.left = pct( skill.zone - half );
     band.style.width = pct( half * 2 );
   }
@@ -984,20 +1650,93 @@ function paintMeter( now ) {
   if ( needle ) needle.style.left = pct( skill.needle );
   if ( meterVerdict ) {
     const fresh = skill.verdictAt >= 0 && now - skill.verdictAt < SKILL.verdict * 1000;
-    meterVerdict.textContent = fresh ? verdictText( skill.last ) : "";
-    meterVerdict.className = "verdict " + skill.last;
+    if ( !fresh ) {
+      // the meter is armed but no verdict has landed yet: the claim stays empty,
+      // which is what keeps a harness reading "" rather than a stale claim
+      if ( verdictWord ) {
+        verdictWord.textContent = "";
+        verdictGain.textContent = "";
+        verdictRun.textContent = "";
+      } else {
+        meterVerdict.textContent = "";
+      }
+      meterVerdict.style.display = "none";
+      return;
+    }
+    // the run decides how dressed the claim is, and the tier is a class rather
+    // than a style so the ladder lives in the stylesheet with the rest of the
+    // purse's look
+    const tier = flairTier( skill.last, combo.streak );
+    meterVerdict.className = "verdict " + skill.last + " f" + tier;
+    // the claim is one string the harnesses read back, so its three parts are
+    // written as three spans with no whitespace between them: the element's
+    // textContent still concatenates to exactly the claim it was promised, while
+    // the glass can dress the grade, the run and the coin separately
+    if ( !verdictWord ) {
+      verdictWord = document.createElement( "span" );
+      verdictWord.className = "word";
+      verdictGain = document.createElement( "span" );
+      verdictGain.className = "gain";
+      verdictRun = document.createElement( "span" );
+      verdictRun.className = "run";
+      meterVerdict.appendChild( verdictWord );
+      // the run goes on before the gold: the claim reads grade, run, coin, so
+      // the order the spans are appended in is the order the parts are built in
+      // and the order the harnesses read the claim back in
+      meterVerdict.appendChild( verdictRun );
+      meterVerdict.appendChild( verdictGain );
+    }
+    const parts = verdictParts( skill.last );
+    verdictWord.textContent = parts.word;
+    verdictGain.textContent = parts.gain;
+    verdictRun.textContent = parts.run;
+    // the claim lifts off the very point the blade went through rather than
+    // sitting above the meter. The meter's own box is clamped to the glass, so
+    // the cut point is measured back from it rather than assumed, and the popup
+    // is held inside the glass by the same 12px the meter keeps for its edges
+    const cx = Math.max( 12 - x, Math.min( window.innerWidth - 12 - x, skill.x - x ) );
+    const cy = Math.max( 12 - y, Math.min( window.innerHeight - 12 - y, skill.y - y ) );
+    meterVerdict.style.left = cx.toFixed( 0 ) + "px";
+    meterVerdict.style.top = cy.toFixed( 0 ) + "px";
+    // the climb is capped at FLAIR.rise and eased out, so the words read as a
+    // firework's rocket that rises and settles rather than as a caption that
+    // walks off the glass; the punch in overshoots and lands on the beat, which
+    // is what makes the claim arrive rather than appear
+    const age = ( now - skill.verdictAt ) / ( SKILL.verdict * 1000 );
+    const climb = FLAIR.rise * flairClimb( age );
+    const p = Math.min( 1, age / FLAIR.pop );
+    const q = p - 1;
+    const punch = 1 + 2.7 * q * q * q + 1.7 * q * q;
+    meterVerdict.style.display = "";
+    meterVerdict.style.transform = "translate(-50%,-50%) translateY(" + ( -climb ).toFixed( 1 ) + "px) scale(" + ( 0.56 + 0.44 * punch ).toFixed( 3 ) + ")";
+    meterVerdict.style.opacity = ( age < FLAIR.fade ? 1 : 1 - ( age - FLAIR.fade ) / ( 1 - FLAIR.fade ) ).toFixed( 3 );
   }
 }
 
+function verdictParts( grade ) {
+  // the claim's three parts, so the display can dress the grade, the run it is
+  // in and the gold it paid separately. They are written in the order the glass
+  // appends them - grade, run, gold - and each carries the space that belongs
+  // to the part after it rather than to the part before, which is what lets the
+  // spans sit flush against each other and still read as one line: "$1" for a
+  // normal cut, "Good $2", "GREAT $3" for the great that opens a run and
+  // "GREAT 6 Combo $8" once the run is a run
+  const gain = skill.gold > 0 ? "$" + skill.gold : "";
+  // the run earns a name only once it is a run: the great that opens one reads
+  // exactly as a lone cut did, so the count never claims a combo of one
+  const run = grade === "great" && combo.streak > 1 ? combo.streak + " Combo " : "";
+  // a normal cut is worth its gold alone, so the grade the purse already named
+  // stays out of the claim and the claim is just the coin
+  const word = grade === "great" ? "GREAT " : grade === "good" ? "Good " : grade === "normal" ? "" : grade === "fail" ? "Missed" : "";
+  return { word, gain, run };
+}
+
 function verdictText( grade ) {
-  // a pass names the gold it paid in, so the money is visible at the moment
-  // the cut lands rather than only in the corner readout
-  const gain = skill.gold > 0 ? " +" + skill.gold : "";
-  if ( grade === "great" ) return "Great cut" + gain;
-  if ( grade === "good" ) return "Good cut" + gain;
-  if ( grade === "normal" ) return "Cut" + gain;
-  if ( grade === "fail" ) return "Missed";
-  return "";
+  // the whole claim, for anything that wants the one string rather than the
+  // three parts the glass dresses - and the string the harnesses read back out
+  // of #skill-verdict is this concatenation, spaces and all
+  const parts = verdictParts( grade );
+  return parts.word + parts.run + parts.gain;
 }
 
 // ---------------------------------------------------------------------------
@@ -1462,6 +2201,14 @@ function buildSickle() {
 export function beginStroke( x, y, type ) {
   sickle.stroke.length = 0;
   sickle.cut.length = 0;
+  // a spent hand cannot swing: the press draws no line, spends no fee and cuts
+  // nothing, so the swipe costs the purse nothing while the field is down. The
+  // draw is marked spent so the drag that follows reaps nothing rather than
+  // continuing a line that never started
+  if ( health.hp <= 0 ) {
+    sickle.spent = true;
+    return;
+  }
   sickle.stroke.push( x, y );
   sickle.pointerType = type;
   sickle.startedAt = performance.now();
@@ -1473,8 +2220,9 @@ export function beginStroke( x, y, type ) {
   // the swipe is a use of the tool, so the fee is spent on the press that
   // starts it rather than on the plants it finds: a line over already-cut
   // ground or open water still costs gold, which is what makes a flick a
-  // decision rather than a free mow of the stand
-  payGold( GOLD.sickle );
+  // decision rather than a free mow of the stand. gear.fee is that fee as the
+  // blade oil leaves it, so an oiled field spends nothing on the press
+  payGold( gear.fee );
   sickle.swings = sickle.swings + 1;
 }
 
@@ -1500,6 +2248,18 @@ export function endStroke() {
     // one cue per swipe, not one per plant: a swish that clears a whole
     // swathe answers with the great cut, a nick answers with the ordinary one
     playSound( took >= SICKLE.swish ? SOUND.great : SOUND.normal, "sickle" );
+    // and it answers on the glass where the blade ended, with the same burst
+    // the check answers with. A swathe is a swathe rather than a pass, so the
+    // readout names the plants it took rather than a grade - but a swish earns
+    // the wider fan, which is what lets a player see the swipe was worth more
+    // than a nick without counting the readout
+    const n = sickle.stroke.length;
+    spawnFlair(
+      n >= 2 ? sickle.stroke[ n - 2 ] : 0,
+      n >= 2 ? sickle.stroke[ n - 1 ] : 0,
+      took >= SICKLE.swish ? 2 : 0,
+      took
+    );
   }
   sickle.stroke.length = 0;
   sickle.spent = false;
@@ -1628,6 +2388,11 @@ function reapSickleOn( x0, y0, x1, y1, w, h ) {
   // blade could actually have reached.
   const r1 = Math.hypot( e[ 0 ], e[ 4 ], e[ 8 ] );
   const r3 = Math.hypot( e[ 3 ], e[ 7 ], e[ 11 ] );
+  // the ring the hand works in, read once per drawn segment: a plant outside it
+  // is beyond the blade whatever the line says, and the test runs before any of
+  // the screen work so the walk over the whole stand stays cheap
+  const playerX = camera.position.x;
+  const playerZ = camera.position.z;
   for ( let t = 0; t < field.tiers.length; t++ ) {
     const mesh = field.tiers[ t ];
     const m = mesh.instanceMatrix.array;
@@ -1641,6 +2406,12 @@ function reapSickleOn( x0, y0, x1, y1, w, h ) {
       const x = m[ o + 12 ];
       const y = m[ o + 13 ];
       const z = m[ o + 14 ];
+      // the ring: the same two metres the check answers to, measured to the
+      // plant's root, so a drawn line reaps the swathe the player is standing
+      // in and leaves the rest of the stand put
+      const dxp = x - playerX;
+      const dzp = z - playerZ;
+      if ( dxp * dxp + dzp * dzp > hand.reach2 ) continue;
       const rw = e[ 3 ] * x + e[ 7 ] * y + e[ 11 ] * z + e[ 15 ];
       if ( rw <= 0.05 ) continue; // the plant's base is behind the camera
       const k4 = i * 4;
@@ -1932,6 +2703,24 @@ const WALK = {
   dragSens: 0.0045, // radians per pixel of drag
 };
 
+// The collapse, in the same seat the WALK table owns. There is no player model
+// to tip over, so the camera is the body and the fall is the camera's own move.
+// The eye drops to the height a body lying in the mud rests at, the horizon
+// rolls as the body tips onto its side, and the head ends up a little along the
+// direction it fell rather than straight down the shaft it stood in. The drop
+// eases IN rather than smoothstepping, which is the whole point: a body
+// accelerates on the way down, and the smoothstep the framings use would make
+// the collapse read as one more eased camera move rather than as gravity.
+export const FALL = {
+  seconds: 1.25, // the time the collapse takes
+  lie: 0.24, // eye height once the body is lying in the mud
+  slide: 0.9, // metres the body ends up along the direction it fell
+  roll: 1.22, // radians the horizon rolls (~70 deg) as the body tips over
+  pitch: -0.26, // radians the head tips down once it is on the ground
+  lift: 0.07, // metres the body takes off the mud at the thud
+  thud: 0.78, // the fraction of the fall at which the body hits the ground
+};
+
 // Touch tuning. A finger is not a cursor: it is wider than a stem, it slides
 // instead of hovering, and the one gesture it makes on the field (press and
 // slide) is exactly the gesture that must NOT spend a skill check. So a tap is
@@ -1978,6 +2767,9 @@ export function setWalk( value ) {
     resetWalk();
     return;
   }
+  // a fallen body does not get a walk back: "hold still" is the only state it
+  // has, so neither a key nor the bar's button can stand it back up
+  if ( health.dead ) return;
   state.walk = value === true || value === 1 || value === "on" || value === "true" || value === "1";
 }
 
@@ -2050,11 +2842,56 @@ export function stepCamera( dt ) {
   cam.move.y = Math.min( WALK.maxY - p.y, Math.max( WALK.minY - p.y, cam.move.y ) );
 }
 
+// the collapse's own two reads: how far through the fall the eye is, eased in
+// rather than smoothstepped so the body accelerates, and the one non-monotonic
+// beat in it - the body hits the ground and takes a hand's width off the mud
+// before settling. The drop reaches the ground at FALL.thud rather than at the
+// end of the fall, which is what makes the bounce a thud on the mud rather than
+// a hitch in mid-air
+function fallEase( t ) {
+  const d = Math.min( 1, t / FALL.thud );
+  return d * d;
+}
+
+function fallThud( t ) {
+  if ( t < FALL.thud ) return 0;
+  const k = ( t - FALL.thud ) / ( 1 - FALL.thud );
+  return Math.sin( k * Math.PI ) * FALL.lift;
+}
+
+// the collapse walks on the wall clock rather than the capped step, so a stalled
+// tab still sees the whole fall rather than a body stuck halfway to the mud
+export function stepFall( raw ) {
+  if ( !health.dead || health.fall >= 1 ) return;
+  health.fall = Math.min( 1, health.fall + raw / FALL.seconds );
+}
+
 export function applyCamera() {
   const p = currentViewPose();
   const yaw = THREE.MathUtils.degToRad( p.yaw ) + cam.look.yaw;
-  const pitch = THREE.MathUtils.degToRad( p.pitch ) + cam.look.pitch;
-  camera.position.set( p.x + cam.move.x, p.y + cam.move.y, p.z + cam.move.z );
+  let pitch = THREE.MathUtils.degToRad( p.pitch ) + cam.look.pitch;
+  // the fall is stacked on top of whatever framing the camera is on rather than
+  // replacing it, so a view button pressed after the collapse still leaves the
+  // body lying rather than standing it back up on the tripod
+  if ( health.fall > 0 ) {
+    const e = fallEase( health.fall );
+    const eye = p.y + cam.move.y;
+    // the camera looks down its own -Z, so the direction the body fell along is
+    // the same one the walker takes its steps from
+    camera.position.set(
+      p.x + cam.move.x - Math.sin( yaw ) * FALL.slide * e,
+      eye - ( eye - FALL.lie ) * e + fallThud( health.fall ),
+      p.z + cam.move.z - Math.cos( yaw ) * FALL.slide * e
+    );
+    // rotation order is YXZ, so z is the camera's own view axis: this is a roll
+    // of the horizon rather than a lean the body would have to be standing to
+    // take
+    camera.rotation.z = FALL.roll * e;
+    pitch += FALL.pitch * e;
+  } else {
+    camera.position.set( p.x + cam.move.x, p.y + cam.move.y, p.z + cam.move.z );
+    camera.rotation.z = 0;
+  }
   camera.rotation.x = pitch;
   camera.rotation.y = yaw;
   if ( Math.abs( camera.fov - p.fov ) > 0.01 ) {
@@ -2072,6 +2909,10 @@ export let rigBlend = 1;
 export function setLight( name ) {
   const preset = PRESETS[ name ];
   if ( !preset ) return;
+  // the hour only costs the hand when it actually moved: naming the hour the
+  // field is already under pins it and spends nothing, which is what keeps a
+  // pinned screenshot harness from paying for a day it never walked through
+  if ( name !== state.light ) passHour();
   rigTarget = preset;
   rigBlend = 0;
   state.light = name;
@@ -2162,15 +3003,15 @@ export function applyRig() {
 // ---------------------------------------------------------------------------
 // Controls. The page owns the DOM; this module owns the scene, so the panel
 // stays declarative in the markup and every control is a small state change
-// here. The view row and the sickle toggle are the two rows carrying buttons
-// now (plus the elevation row a phone needs): the light row is gone because
-// the hour walks itself through the presets a minute at a time, and the wind
-// slider, the camera row and the playback row were removed, so Shift+Arrow
-// nudges the wind, Space toggles pause, k draws or sheathes the sickle, and
-// the arrow keys / WASD walk with nothing gating them. setWind / setPaused /
-// setWalk / setSickle stay exported because the autotest harness drives them
-// straight over the DevTools protocol, and setLight stays exported because the
-// harness pins one hour.
+// here. The sickle toggle and the shop row are the two rows carrying action
+// buttons now (plus the elevation row a phone needs): the light row is gone
+// because the hour walks itself through the presets a minute at a time, and the
+// wind slider, the camera row and the playback row were removed, so Shift+Arrow
+// nudges the wind, Space toggles pause, k draws or sheathes the sickle, b opens
+// or closes the shop card, and the arrow keys / WASD walk with nothing gating
+// them. setWind / setPaused / setWalk / setSickle / setShop stay exported
+// because the autotest harnesses drive them straight over the DevTools
+// protocol, and setLight stays exported because the harness pins one hour.
 // ---------------------------------------------------------------------------
 export function setWind( v ) {
   state.wind = Math.max( 0, Math.min( 1, v ) );
@@ -2200,17 +3041,20 @@ export function setSickle( v ) {
 }
 
 export function wireUI() {
-  // the view row left the panel, so the sickle toggle is the only action still
-  // on the glass and the loop no longer has to sort two actions from one
-  // another; the framing is reached with the v key and with ?view= in the url,
-  // which is why setView stays exported
+  // the bar now carries two actions rather than one: the sickle flips a mode the
+  // pointer answers to and the shop opens or closes the card the kit sits on.
+  // The framing is still reached with the v key and with ?view= in the url, which
+  // is why setView stays exported
   for ( const node of document.querySelectorAll( "[data-action]" ) ) {
     const action = node.getAttribute( "data-action" );
     node.addEventListener( "click", ( e ) => {
-      if ( action !== "sickle" ) return;
-      // setSickle paints the .on class itself, so the click and the k key
-      // leave the panel reading the same thing the mode is
-      setSickle( !state.sickle );
+      if ( action === "sickle" ) {
+        // setSickle paints the .on class itself, so the click and the k key
+        // leave the panel reading the same thing the mode is
+        setSickle( !state.sickle );
+        return;
+      }
+      if ( action === "shop" ) setShop( !shop.open );
     } );
     if ( action === "sickle" ) {
       sickleButton = node;
@@ -2218,6 +3062,34 @@ export function wireUI() {
       // agree with the mode before a single click has happened
       sickleButton.classList.toggle( "on", state.sickle );
     }
+    if ( action === "shop" ) {
+      shopButton = node;
+      // ?shop=1 opens the card at start, so the button has to read open before
+      // a single click has happened
+      shopButton.classList.toggle( "on", shop.open );
+    }
+  }
+
+  // the card's own state, the prices and the purse line are written at start
+  // rather than at the first click, so ?shop=1 shows a priced card the moment
+  // the page boots and a closed card still reads the purse the player holds
+  setShop( shop.open );
+
+  // the hand's bar is painted at start rather than at the first cost, so the
+  // meter reads a full day the moment the page boots and a harness never sees
+  // an empty bar that the hand has not actually spent
+  paintHealth();
+
+  // The shop's own buttons: each carries the id of the piece it sells, so one
+  // loop wires all of them and buy() decides whether the purse can pay. The row
+  // re-reads the ledger the purchase just moved, so the price, the word and the
+  // purse line all answer the same click rather than the next one.
+  for ( const node of document.querySelectorAll( "[data-buy]" ) ) {
+    const id = node.getAttribute( "data-buy" );
+    node.addEventListener( "click", ( e ) => {
+      buy( id );
+      paintShop();
+    } );
   }
 
   // -------------------------------------------------------------------------
@@ -2356,6 +3228,10 @@ export function wireUI() {
     // a keyboard and a thumb cannot disagree about which of the two the pointer
     // is holding
     else if ( e.key === "k" ) setSickle( !state.sickle );
+    // b opens or closes the shop card: the same flip the Shop row's button takes.
+    // b is free of the walk, which is all keys are: KeyS is a walk key rather than
+    // a shop key, which is why the card does not answer to s
+    else if ( e.key === "b" ) setShop( !shop.open );
   } );
 
   window.addEventListener( "keyup", ( e ) => {
@@ -2619,6 +3495,10 @@ export function frame( now ) {
   easeRig( dt );
   applyRig();
   stepCamera( dt );
+  // the collapse belongs to the viewer rather than to the field's clock, so it
+  // runs outside the pause guard along with the walk - and takes the wall gap
+  // rather than the capped step so the fall is the same length at any frame rate
+  stepFall( raw );
   applyCamera();
   // the held item rides the camera, so it follows the framing whether the
   // environment is paused or running - the arm belongs to the viewer, not to the
@@ -2641,6 +3521,10 @@ export function frame( now ) {
   // the drawn line is DOM rather than geometry, so it is painted on the same
   // pass as the meter rather than in the scene graph
   paintStroke();
+  // the burst a cut answers with is DOM as well, and it walks on the wall clock
+  // like the meter does - pausing holds the environment, not the purse's answer,
+  // so a cut made just before the pause still finishes its climb
+  stepFlair( now );
   renderer.render( scene, camera );
 
   perf.frames++;
@@ -2662,12 +3546,64 @@ export function frame( now ) {
         // the sickle is a mode rather than a number, so the readout only names
         // it while it is drawn - a sheathed field reads exactly as before
         ( state.sickle ? " · sickle" : "" ) +
+        // the shop card is a mode rather than a number, so the readout only
+        // names it while the card is on the glass
+        ( shop.open ? " · shop" : "" ) +
         " · cut " + harvest.cut +
         // the purse: what the cuts have paid in less what the sickle has
         // spent, so the money the player holds is readable at a glance
         " · gold " + purse.gold +
+        // the kit the player is carrying: only named once anything is carried,
+        // which is what keeps a field that has never been shopped in reading
+        // the way it did before
+        ( shop.bought > 0 ? " · gear " + shop.bought : "" ) +
+        // a meal the purse paid for: named only once one has been eaten, which
+        // is what keeps a field that has never bought food reading the way it
+        // did before. It is kept apart from the carried kit, since a ration
+        // fills the hand rather than moving a number the field runs on
+        ( shop.eaten > 0 ? " · ate " + shop.eaten : "" ) +
+        // the hand's own day: the bar on the glass is the same number, so the
+        // cost of the next miss is legible in both places rather than one
+        " · hp " + health.hp +
+        // the fall the body is in: the eye is still moving while the collapse
+        // runs, so the readout says which half of it the player is watching
+        // rather than naming a state the picture has not reached yet
+        ( health.dead ? ( health.fall < 1 ? " · falling" : " · down" ) : "" ) +
+        // the run the player is in: the count the verdict and the purse both
+        // answer to, so a harness can read the streak rather than infer it from
+        // the gold a cut paid. It stays out of the readout until the run is a
+        // run, which is what keeps a field that has never been run through
+        // reading the way it did before
+        ( combo.streak > 1 ? " · combo " + combo.streak : "" ) +
+        // the ring the hand works in: both tools answer to it, so the rule that
+        // decides what a click can cut is legible rather than something the
+        // viewer has to guess from a dead click. hand.reach is that ring as the
+        // snath leaves it, so the number named is the ring the click actually cut
+        " · reach " + hand.reach + "m" +
+        // a click the ring refused: the check spent nothing, so the refusal is
+        // named for as long as it is fresh - otherwise the one outcome the ring
+        // produces would read as a cursor that did nothing at all
+        ( performance.now() - skill.farAt < SKILL.verdict * 1000 ? " · too far" : "" ) +
+        // a purchase the purse refused: the fee was spent nothing, so the refusal
+        // is named for as long as it is fresh - otherwise a click on a piece the
+        // purse cannot pay would read as a button that did nothing at all
+        ( performance.now() - shop.refusedAt < SKILL.verdict * 1000 ? " · purse too light" : "" ) +
+        // a ration the hand refused: the fee was spent nothing, so the refusal
+        // is named for as long as it is fresh - otherwise a click on a row that
+        // can recover nothing would read as a button that did nothing at all
+        ( performance.now() - shop.fullAt < SKILL.verdict * 1000 ? " · not hungry" : "" ) +
+        // a ration a fallen body asked for: the fee was spent nothing, so the
+        // refusal is named for as long as it is fresh - otherwise a click on the
+        // row would read as a button that did nothing at all
+        ( performance.now() - shop.goneAt < SKILL.verdict * 1000 ? " · no hand" : "" ) +
         " · buffer " + perf.buffer;
     }
+    // the card reads the ledger it is priced against on the same 500 ms clock
+    // the readout walks, so a price the purse has since grown stops wearing the
+    // rust and one the purse has since spent stops reading as affordable: the
+    // rows answer the purse rather than the last click, which is what keeps a
+    // closed card paying the layout nothing at all
+    if ( shop.open ) paintShop();
   }
 }
 
@@ -2675,6 +3611,9 @@ export function start() {
   build();
   buildField();
   wireUI();
+  // the burst's node pool is built at start rather than at the first cut, so
+  // the first pass through the field answers the same way the hundredth does
+  buildFlair();
   resize();
   window.addEventListener( "resize", () => resize() );
   if ( params.autotest ) {
@@ -2698,6 +3637,45 @@ export function start() {
       // earned rather than infer it from the readout
       purse,
       GOLD,
+      // the run: its state and its cap, so a harness can watch a streak grow,
+      // read the gold it bought and prove where it stopped growing
+      combo,
+      COMBO,
+      // the shop: its ledger, its table, the numbers the carried kit moves and
+      // the two halves that price and buy a piece, so a harness can prove a
+      // purchase spent its fee off the purse, moved the rule it names and left
+      // the bare table alone rather than click a button
+      shop,
+      EQUIPMENT,
+      EQUIPMENT_BY_ID,
+      gear,
+      buy,
+      setShop,
+      paintShop,
+      // the hand's day: its ledger, its bare table, and the two halves that pay
+      // a cost and take a meal back, so a harness can prove a miss and an hour
+      // spent the hand off rather than read the bar's width back
+      health,
+      HP,
+      hurt,
+      heal,
+      passHour,
+      paintHealth,
+      // the collapse: the table the camera work runs on and the two halves that
+      // mark the body down and walk the eye down after it, so a harness can read
+      // the fall back out of the camera rather than infer it from a screenshot
+      FALL,
+      downPlayer,
+      stepFall,
+      // the hour's own two halves, so a harness can walk the field one hour at
+      // a time rather than wait out a minute for the page to do it
+      advanceLight,
+      cycleLight,
+      // the live holders the carried kit moves: the ring the hand works in and
+      // the bands the check grades on, so a harness can prove the snath and the
+      // whetstone moved the rule rather than the table it was told
+      hand,
+      bands,
       gradeAt,
       // the check's own two halves, so a harness can play a named grade rather
       // than fight the frame clock to land the needle on it
@@ -2712,6 +3690,15 @@ export function start() {
       // the burst's own step, so a harness can park fragments anywhere and have
       // the page rewrite their matrices rather than duplicating the matrix math
       stepFx,
+      // the purse made visible: the burst's state and its ladder, and the two
+      // halves that arm and walk it, so a harness can prove a cut answered at the
+      // point it went through and that the answer dressed itself with the run
+      // rather than infer any of it from pixels
+      flair,
+      FLAIR,
+      flairTier,
+      spawnFlair,
+      stepFlair,
       // the cues and the record of what the page chose to play, so a harness can
       // check the sound an outcome was answered with rather than listen to it
       sound,
@@ -2723,6 +3710,10 @@ export function start() {
       // pixels
       sickle,
       SICKLE,
+      // the bare ring both tools answer to, so a harness can prove which plants
+      // the hand was near and that a carried piece moved the live holder rather
+      // than the table it was told
+      REACH,
       sickleRig,
       setSickle,
       beginStroke,
