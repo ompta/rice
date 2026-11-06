@@ -90,6 +90,41 @@
     </div>
 
     <!--
+      The field's own wildlife. Nothing is markup here: a bear, a boar and a
+      snake are let loose through the stand at random on the field's own clock
+      and walk toward the player, and a beast that gets within arm's length
+      winds up and strikes - the strike takes its damage off the hand through
+      hurt(), the one ledger the bar above, the ration and the collapse already
+      answer to, so a beast never has to know anything about health of its own.
+      Each animal is assembled at runtime out of three.js's own primitives
+      merged into one geometry per species, so a beast is one mesh and one draw
+      call and the page's asset count stays where it was; it stands on the mud at
+      the field's own floor, which is why a metre of rice hides a boar's legs and
+      a snake's whole length. The bar wears a struck class for a moment after a
+      strike lands and the readout names the animal that paid it, which is what
+      lets a player tell a bite from a misjudged cut. The hand has two answers
+      to an animal and both now spend the animal's own hide rather than only
+      scaring it: the blade it already has, where a swipe ending with beasts
+      inside the ring pays one hit to EVERY animal standing in that ring at once
+      rather than to the nearest one, and the cursor aimed at one, which arms the
+      cut's own meter on that animal rather than on the plant standing behind it.
+      The meter is one gauge and the grading is one rule, but the animal's sweep
+      is 0.8 s rather than the cut's 1.5 s, so its great band spans 56 ms on the
+      glass instead of the cut's 105 - the check is the same rule at a riskier
+      window rather than a second game. Each species carries a hide of its own
+      (a bear 60, a boar 36, a snake 20) and a coin of its own (9, 5, 3), and the
+      bar over the animal's head is that hide: an animal that survives a hit is
+      driven off as it always was, and one whose hide the hit brings down leaves
+      the stand and pays its species' coin into the purse. Neither answer touches
+      the harvest counts, the grade table or the combo run, so a kill is a second
+      answer rather than a dressed cut and the purse is the one ledger a fall
+      moves; a missed check still costs the hand its HP, like any other spent
+      check.
+      ?beast= names how many the stand may hold at once - ?beast=0 turns the
+      wildlife off, which is what a harness that is not about the beasts pins.
+    -->
+
+    <!--
       The shop card. The purse is a ledger rather than a score, so it can also
       buy: the kit the field sells is priced in the very gold the cuts pay into
       and the sickle spends from, and a purchase spends the fee through payGold
@@ -166,7 +201,10 @@
       takes over while the field is under the golden hour; whichever loop is
       running stops the moment its hour leaves, and the skill check answers itself
       with cutgreat.mp3 for a great cut, cutnormal.mp3 for an ordinary one and
-      hurt.mp3 for a miss. ?sound=0 mutes the whole field. A loop the browser
+      hurt.mp3 for a miss - the same cue answers a bear, a boar or a snake that
+      reaches the hand, keyed by the species that paid it, which is what keeps
+      one cue rather than three for the one thing the hand feels. ?sound=0 mutes
+      the whole field. A loop the browser
       has refused to start - its autoplay policy wants the visitor to touch the
       page first - is asked for again on the next frame, so the bird joins in
       the moment the visitor moves.
@@ -176,6 +214,14 @@
       <div id="pad-knob" class="knob"></div>
     </div>
 
+    <!--
+      The meter. One gauge for both checks the hand makes: a click on a plant
+      arms it on that plant and a click on an animal standing in the stand arms
+      it on that animal. The two differ only in how fast the needle crosses -
+      1.5 s for a stalk, the animal's snappier 0.8 s - which is what keeps the
+      grading one rule rather than two. app.js moves the whole gauge to the
+      clicked point, so the markup never says which of the two it is about
+    -->
     <div id="skill" class="skill" aria-label="Skill check" hidden>
       <div class="band" id="skill-normal"></div>
       <div class="band good" id="skill-good"></div>
@@ -195,6 +241,24 @@
       reads the claim out of the markup it was promised.
     -->
     <div id="flair" class="flair" aria-label="The purse's fireworks" hidden></div>
+
+    <!--
+      The bars the animals wear. Nothing is markup here for each animal: the
+      layer holds a fixed pool of bars sized to the population the stand can
+      hold, and app.js places one over the top of each standing animal by the
+      same product the pick runs, so the gauge on the glass and the animal under
+      it are the same point. The layer is pointer-transparent for the same reason
+      the burst's is - a gauge floating over an animal must never eat the click
+      that aims the check at that same animal, which is the one thing that would
+      otherwise make the animals unattackable. A bar is a frame with a fill in it
+      rather than a bar of its own width, so app.js writes one share per animal
+      and the layout never moves; the fill is a share of the hide that animal
+      started with rather than of the species' table, so a hit reads against the
+      animal rather than against a number the player has to look up. The layer
+      hides itself while the stand holds nothing, and a field with ?beast=0 owns
+      no nodes at all.
+    -->
+    <div id="beasthp" class="beasthp" aria-label="The animals' health" hidden></div>
 
     <!--
       The line the sickle has drawn lives here rather than in the scene: the

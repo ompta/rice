@@ -17,8 +17,10 @@
 //                 one plant shared by all of them - the lush foreground one,
 //                 its drooping head hung with ripe gold ears
 //   hover         pointing at the field outlines one plant in bright leaf edges
+//                 and notices an animal standing under the cursor
 //   skill check   clicking a plant arms a meter, a second click plays it and a
-//                 pass cuts the plant
+//                 pass cuts the plant; clicking an animal arms the same meter on
+//                 a shorter sweep and a pass drives that one animal off
 //   cut fragments a pass also slices the plant: five slivers of leaf tear off
 //                 at the cut plane and fall, all of them one InstancedMesh
 //   sickle        a toggle on the panel hands the pointer over to a sickle: a
@@ -27,7 +29,8 @@
 //                 over is cut at the stubble
 //   sound         the daylight hours loop the small bird, the golden hour loops
 //                 the evening cicada, and the skill check answers itself: a
-//                 great cut, an ordinary cut, a miss
+//                 great cut, an ordinary cut, a miss - and so does a beast's
+//                 strike, on the same cue keyed by the species that paid it
 //   purse         a cut pays the field: 1 gold for a normal cut, 2 for a good
 //                 one, 3 for a great one, and every sickle swipe begun takes
 //                 1 gold off the purse
@@ -45,6 +48,16 @@
 //                 and the claim itself lifts off the cut and dies a capped
 //                 height above it - the whole answer dressed by the run, so a
 //                 deep one reads grander than the nick that opened it
+//   beasts        the field's own wildlife: a bear, a boar and a snake are let
+//                 loose through the stand at random and walk toward the player,
+//                 and a beast that reaches arm's length winds up and strikes -
+//                 the strike takes its damage through hurt(), so the bar on the
+//                 glass, the ration and the collapse are the same ledger a bite
+//                 answers to. Each animal is primitives merged into one geometry
+//                 per species, so a beast is one draw call, a swipe ending
+//                 with one inside the ring drives it off rather than killing it,
+//                 and a check aimed at one plays the cut's own meter on the
+//                 animal's shorter sweep to do the same to that one animal
 //
 // Nothing is loaded: every geometry and material here is procedural, so the
 // page's only dependency is three.js itself, which index.html's import map
@@ -117,6 +130,13 @@ export const params = (() => {
     // 1 = open the shop card at start, so a harness can price a purchase without
     // first clicking the bar
     shop: num( "shop", 0 ) > 0,
+    // how many beasts the stand may be holding at once: the bear, the boar and
+    // the snake are let loose through it at random and walk toward the player,
+    // so the number named is the population rather than a rate. 0 turns the
+    // field's own wildlife off altogether, which is what a harness that is not
+    // about the beasts pins - a hand that is being measured for a screenshot
+    // should not be paying for a bear on top of it
+    beast: Math.max( 0, Math.round( num( "beast", 4 ) ) ),
     // how far the hand works, in metres: the radius of the ring around the
     // player inside which either tool cuts. Two metres is arm's length, which
     // is what makes the stand the player is standing in the stand that gets
@@ -688,6 +708,21 @@ export const field = { tiers: [], instances: 0, triangles: 0 };
 // canvas pixels, and radius is how close (in px) the cursor must be to a stem
 // to count as pointing at it. The hover highlight reads this; see pickPlant.
 export const hover = { tier: -1, index: -1, height: 0, x: -1, y: -1, radius: 13 };
+// the animal standing under the cursor or null, and the middle of its body on
+// the glass: an animal is a scene object rather than an instance, so there is no
+// per-instance flag to light for it and the pick only says what the next click
+// answers to. See pickBeast.
+hover.beastX = -1;
+hover.beastY = -1;
+// the animal itself is kept on the pick rather than beside it, so armSkill has
+// one place to ask what the click answers to - and it is made non-enumerable on
+// purpose. The beast carries the mesh it wears, a mesh carries the scene it is
+// in, and the scene carries the meshes again, so a plain property would make the
+// hover object circular and JSON.stringify( hover ) - which is how the harnesses
+// read the pick back - would throw rather than print it. A hidden property keeps
+// the dump the same six numbers it always was while the page still reads the
+// animal straight off hover.beast wherever it needs it
+Object.defineProperty( hover, "beast", { value: null, writable: true, enumerable: false, configurable: true } );
 
 // ---------------------------------------------------------------------------
 // The arm's reach: the ring around the player both tools answer to. A check
@@ -729,7 +764,11 @@ export function fromPlayerD2( x, z ) {
 // ---------------------------------------------------------------------------
 // Skill check: clicking a plant arms a Dead by Daylight style meter - a needle
 // sweeps the track left to right and the next click plays it. Where the needle
-// happens to be decides the grade, and every pass cuts the plant.
+// happens to be decides the grade, and every pass cuts the plant. Clicking an
+// animal standing in the stand arms the same meter on that animal instead, on a
+// shorter sweep (BEAST_RULE.attack.sweep rather than SKILL.sweep), and a pass
+// drives that one animal off rather than cutting - so the gauge, the bands and
+// the grading are one rule for both, and only the sweep and the outcome differ.
 //
 // The three bands are nested half widths measured as a share of the track, so
 // grading is one distance against three thresholds and the DOM draws them as
@@ -1366,6 +1405,14 @@ export const skill = {
   active: false,
   tier: -1,
   index: -1,
+  // what the live check is bound to: "" before the first arm, "plant" for a
+  // stalk and "beast" for an animal standing in the stand. The two share one
+  // meter and one grading, so only the sweep and what a pass does differ
+  target: "",
+  // seconds this check's needle takes to cross the track: the cut's own 1.5 s
+  // for a stalk, the animal's shorter sweep for a beast. Kept on the check so
+  // the one line that advances the needle never has to know which it is on
+  sweep: SKILL.sweep,
   x: 0, // where the click landed, so the meter stays put while the cursor roams
   y: 0,
   zone: 0, // centre of the target zone, 0..1 along the track
@@ -1382,6 +1429,13 @@ export const skill = {
   farAt: -1,
 };
 
+// the animal this check is bound to, kept apart from the literal above for the
+// same reason hover.beast is kept apart: the beast carries the mesh it wears and
+// the mesh carries the scene it stands in, so a plain property would make the
+// check circular and JSON.stringify( skill ) - which is how the harnesses read
+// the meter back - would throw rather than print the gauge it was promised
+Object.defineProperty( skill, "beast", { value: null, writable: true, enumerable: false, configurable: true } );
+
 // the grade is a distance from the zone centre against the nested bands, so
 // one subtraction decides all four variants
 export function gradeAt( pos ) {
@@ -1392,11 +1446,50 @@ export function gradeAt( pos ) {
   return "fail";
 }
 
+// the same arming, bound to an animal rather than a stalk: one meter, one
+// grading and one ring, so only the sweep and what a pass does differ. The
+// sweep is the animal's own and shorter, which is what makes the check about a
+// beast the same rule at a riskier window rather than a second game. Reach is
+// measured the way a plant's is - off the field position, from the player's own
+// seat - so the ring both tools answer to is one ring
+function armBeast( b ) {
+  if ( fromPlayerD2( b.x, b.z ) > hand.reach2 ) {
+    // the animal is outlined by nothing and the hand cannot touch it: no meter,
+    // no check spent, and the readout says so rather than leaving a dead cursor
+    skill.farAt = performance.now();
+    return;
+  }
+  skill.active = true;
+  skill.target = "beast";
+  skill.beast = b;
+  skill.sweep = BEAST_RULE.attack.sweep;
+  // the check is bound to the animal rather than to a stalk, so the plant pick
+  // stays out of it and a pass can never reach cutPlant
+  skill.tier = -1;
+  skill.index = -1;
+  // the meter floats over the middle of the animal's body rather than over the
+  // cursor, so the gauge reads as the animal's own answer
+  skill.x = hover.beastX;
+  skill.y = hover.beastY;
+  // the zone centre stays a whole normal band plus the lead in from both ends,
+  // which is what makes an instant click a guaranteed miss
+  const span = 1 - 2 * ( bands.normal + SKILL.lead );
+  skill.zone = bands.normal + SKILL.lead + Math.random() * span;
+  skill.needle = 0;
+  skill.startedAt = performance.now();
+}
+
 export function armSkill() {
   // a spent hand: the check does not arm, so no meter appears, no check is
   // spent and nothing is cut. The readout names the hand as down rather than
   // leaving the click on it to read as a dead cursor
   if ( health.hp <= 0 ) return;
+  // an animal standing under the cursor answers the click ahead of any plant
+  // behind it, so a hand aimed at a beast is a hand aimed at the beast
+  if ( hover.beast ) {
+    armBeast( hover.beast );
+    return;
+  }
   if ( hover.tier < 0 ) return; // nothing under the cursor: nothing to check
   // the ring: a plant the hand cannot touch is outlined for inspection but
   // never armed, so a click there spends nothing and no meter appears. The
@@ -1412,6 +1505,9 @@ export function armSkill() {
     return;
   }
   skill.active = true;
+  skill.target = "plant";
+  skill.beast = null;
+  skill.sweep = SKILL.sweep;
   skill.tier = hover.tier;
   skill.index = hover.index;
   skill.x = hover.x;
@@ -1428,6 +1524,39 @@ export function resolveSkill() {
   const grade = gradeAt( skill.needle );
   skill.at = skill.needle;
   skill.last = grade;
+  // an animal rather than a stalk: the grade is the same rule and the meter is
+  // the same gauge, but the pass pays one animal a grade-scaled hit rather than
+  // cutting a stalk - so the harvest counts and the combo run stay exactly as the
+  // cut's own table left them and no plant is left standing shorter. An animal the
+  // hit brings down pays its species' coin into the purse, which is what the
+  // verdict names below it; one that only went off pays nothing, and neither kind
+  // of pass lands in a run
+  if ( skill.target === "beast" ) {
+    const prey = skill.beast;
+    skill.gold = 0;
+    spawnFlair( skill.x, skill.y, flairTier( grade, combo.streak ), -1 );
+    skill.verdictAt = performance.now();
+    skill.active = false;
+    if ( grade !== "fail" ) {
+      // what the purse held before the answer, so the verdict can name the coin
+      // this check actually paid rather than the number a species' table would
+      // have paid: an animal that only went off pays nothing and one that came
+      // down pays its species' hide
+      const earned = purse.earned;
+      strikeBeast( prey, grade );
+      skill.gold = purse.earned - earned;
+      // the species that answered keys the cue, which is what lets a harness
+      // prove the answer the animal paid rather than the cut's
+      playSound( grade === "great" ? SOUND.great : SOUND.normal, prey ? prey.spec.id : grade );
+    } else {
+      playSound( SOUND.hurt, grade );
+      // the swing was made and the animal was not driven off, so the arm paid
+      // for it exactly as it does for a missed cut
+      hurt( HP.fail );
+    }
+    skill.beast = null;
+    return;
+  }
   // the money the pass paid in, kept on the check so the verdict can name it.
   // A miss is not in the table, so it earns nothing and the verdict stays bare
   skill.gold = earnGold( grade );
@@ -1610,7 +1739,7 @@ let verdictRun = null;
 // field still plays the check - pausing holds the environment, not the UI
 export function stepSkill( now ) {
   if ( skill.active ) {
-    skill.needle = ( now - skill.startedAt ) / ( SKILL.sweep * 1000 );
+    skill.needle = ( now - skill.startedAt ) / ( skill.sweep * 1000 );
     // the needle reached the far end with no click: that is a miss, and the
     // lead rule means gradeAt(1) can never read as a pass
     if ( skill.needle >= 1 ) {
@@ -1686,7 +1815,7 @@ function paintMeter( now ) {
       meterVerdict.appendChild( verdictRun );
       meterVerdict.appendChild( verdictGain );
     }
-    const parts = verdictParts( skill.last );
+    const parts = verdictParts( skill.last, skill.target === "beast" );
     verdictWord.textContent = parts.word;
     verdictGain.textContent = parts.gain;
     verdictRun.textContent = parts.run;
@@ -1713,7 +1842,7 @@ function paintMeter( now ) {
   }
 }
 
-function verdictParts( grade ) {
+function verdictParts( grade, runless ) {
   // the claim's three parts, so the display can dress the grade, the run it is
   // in and the gold it paid separately. They are written in the order the glass
   // appends them - grade, run, gold - and each carries the space that belongs
@@ -1723,8 +1852,10 @@ function verdictParts( grade ) {
   // "GREAT 6 Combo $8" once the run is a run
   const gain = skill.gold > 0 ? "$" + skill.gold : "";
   // the run earns a name only once it is a run: the great that opens one reads
-  // exactly as a lone cut did, so the count never claims a combo of one
-  const run = grade === "great" && combo.streak > 1 ? combo.streak + " Combo " : "";
+  // exactly as a lone cut did, so the count never claims a combo of one. runless
+  // is set for a check about an animal, which lands in no run whatever the grade,
+  // so the glass cannot dress a streak the animal's pass did not make
+  const run = !runless && grade === "great" && combo.streak > 1 ? combo.streak + " Combo " : "";
   // a normal cut is worth its gold alone, so the grade the purse already named
   // stays out of the claim and the claim is just the coin
   const word = grade === "great" ? "GREAT " : grade === "good" ? "Good " : grade === "normal" ? "" : grade === "fail" ? "Missed" : "";
@@ -1734,8 +1865,10 @@ function verdictParts( grade ) {
 function verdictText( grade ) {
   // the whole claim, for anything that wants the one string rather than the
   // three parts the glass dresses - and the string the harnesses read back out
-  // of #skill-verdict is this concatenation, spaces and all
-  const parts = verdictParts( grade );
+  // of #skill-verdict is this concatenation, spaces and all. The runless flag
+  // is the live check's own, so the one string and the three spans the glass
+  // dresses agree about which checks land in a run
+  const parts = verdictParts( grade, skill.target === "beast" );
   return parts.word + parts.run + parts.gain;
 }
 
@@ -2261,6 +2394,12 @@ export function endStroke() {
       took
     );
   }
+  // the blade at arm's length answers a beast as well as the stand: the swipe
+  // drives whatever was standing in the ring off rather than killing it, which
+  // is what leaves a beast a hazard to be walked out of rather than a target to
+  // be farmed. It runs after the reap rather than inside it, so the plants the
+  // swipe took and the fee it paid are exactly as they were
+  frightenBeasts();
   sickle.stroke.length = 0;
   sickle.spent = false;
 }
@@ -2515,6 +2654,848 @@ export function stepSickle( now ) {
     SICKLE.hy + 0.05 - 0.07 * ease,
     SICKLE.hz + 0.05 * ease
   );
+}
+
+// ---------------------------------------------------------------------------
+// The field's own wildlife. Three species - a bear, a boar and a snake - are
+// let loose through the stand at random and walk toward the viewer: a beast
+// that gets within arm's length of the player winds up and strikes, and a
+// strike takes its damage off the hand through hurt(), which is the one ledger
+// the bar on the glass, the ration and the collapse already answer to. Nothing
+// is loaded: each animal is assembled at runtime out of three.js's own
+// primitives merged into ONE geometry per species, so a beast is one mesh, one
+// material and one draw call, and the page's asset count stays where it was.
+//
+// A beast is a scene object rather than a HUD decal, so it takes the field's
+// own lights, its own fog and its own floor: it stands on the mud at floorTop()
+// and dissolves into the haze the further out it has wandered. The rice is a
+// metre deep, which is why a boar reads as a parting shoulder and a snake as a
+// raised head rather than as a whole animal - the stand is what hides them, and
+// a player hears the cue before finding the beast that paid it.
+//
+// The hand's answer is the two tools it already has, and both now land on the
+// animals' own hides rather than only scaring them: a swipe ending with beasts
+// inside the ring pays one hit to EVERY animal standing in it, and the cursor
+// aimed at one pays that single animal a grade-scaled hit. An animal that
+// survives is driven off as it always was; one whose hide the hit brings down
+// leaves the stand and pays its species' coin into the purse. The reap's own
+// numbers (sickle.cut, the grade table, the fragment pool, the combo run) are
+// untouched by either, which is what keeps a kill a second answer rather than a
+// dressed cut - the purse grows from the wildlife, the harvest counts do not
+// ---------------------------------------------------------------------------
+
+// the bare table a harness is told: what each species is worth, how fast it
+// comes and how often it bites. beasts.cap is the population the field actually
+// runs under, so ?beast= moves the live number rather than this one
+export const BEASTS = [
+  {
+    id: "bear",
+    name: "Bear",
+    // a bear is the slowest to arrive and the heaviest to land: it cannot be
+    // outrun at a walk by much, so the answer to it is the blade rather than a
+    // retreat
+    speed: 2.2,
+    turn: 1.9,
+    aggro: 26,
+    reach: 1.9,
+    wind: 0.5,
+    lunge: 1.5,
+    cool: 2.8,
+    damage: 18,
+    gaitRate: 7.4,
+    bob: 0.055,
+    roll: 0.06,
+    sway: 0,
+    rear: 0.5,
+    // the animal's own hide: how much the hand has to land on it before it comes
+    // down, and the coin that hide is worth once it does. A bear is the heaviest
+    // to bring down and the richest, which is what makes finishing one a decision
+    // rather than free coin - the same trade the species' damage already makes
+    hp: 60,
+    gold: 9,
+  },
+  {
+    id: "boar",
+    name: "Boar",
+    // the fastest of the three and the one that bites most often: a boar is
+    // worth less per hit and comes back for more, which is what makes it the
+    // species a player has to keep turning to face
+    speed: 2.9,
+    turn: 2.6,
+    aggro: 20,
+    reach: 1.5,
+    wind: 0.3,
+    lunge: 1.8,
+    cool: 2.0,
+    damage: 12,
+    gaitRate: 9.6,
+    bob: 0.05,
+    roll: 0.07,
+    sway: 0,
+    rear: 0.34,
+    // a boar is the quickest to come back for more and the cheapest to bring
+    // down: it is worth less per fall than a bear, which is what makes it the
+    // species a player clears through rather than the one a player pays for
+    hp: 36,
+    gold: 5,
+  },
+  {
+    id: "snake",
+    name: "Snake",
+    // the shortest reach and the smallest wind-up: a snake does not chase, it
+    // closes over ground and bites at whatever is already near it, so the
+    // answer to it is not to stand where one has been seen
+    speed: 1.5,
+    turn: 1.4,
+    aggro: 13,
+    reach: 1.1,
+    wind: 0.26,
+    lunge: 0.9,
+    cool: 2.2,
+    damage: 9,
+    gaitRate: 5.2,
+    bob: 0.012,
+    roll: 0.03,
+    sway: 0.2,
+    rear: 0.3,
+    // the least hide and the least coin: a snake goes down in two good swipes,
+    // which is what lets a player clear the stand's smallest animals rather than
+    // having to bring the whole arm to bear on each one
+    hp: 20,
+    gold: 3,
+  },
+];
+
+// the field's own clock for letting them loose
+export const BEAST_RULE = {
+  first: 1.4, // seconds before the stand gets its first beast
+  every: [ 3.5, 8.5 ], // seconds between the next one and the one after
+  strike: 0.3, // seconds the dash a bite rides on lasts
+  leave: 58, // metres from the player past which a beast is let go
+  minX: -124,
+  maxX: 124,
+  minZ: -96,
+  maxZ: 14, // the stand's own edges, walked to rather than past
+  // the hand's own answer to an animal: the same meter the cut plays and the
+  // same grading, on a shorter sweep. The bands stay the cut's, so an animal's
+  // great band spans 56 ms on the glass rather than the cut's 105 - the check
+  // is one rule at a riskier window rather than a second game, which is what
+  // makes walking up to a beast a decision rather than free work
+  attack: {
+    sweep: 0.8, // seconds for the needle to cross the track about an animal
+    pick: 26, // px from the animal's body that counts as pointing at it
+    // the two hits the hand lands on an animal, and both sit under the species'
+    // own hide rather than over it: a swipe pays one hit to EVERY animal standing
+    // in the ring the swipe ends in, so the blade attacks all of the beasts the
+    // arm covers at once rather than the nearest one, and the aimed check pays
+    // one animal a grade-scaled hit. A bear (60 hp) therefore takes five swipes
+    // or three great checks rather than falling to the first touch
+    blade: 13, // damage the swipe pays each animal inside the ring
+    hit: { great: 26, good: 15, normal: 7 }, // damage the aimed check pays per grade
+    shove: { great: 4.2, good: 2.6, normal: 1.2 }, // metres the pass drives it back
+    cool: { great: 1.6, good: 1.1, normal: 0.7 }, // seconds of extra cool it pays
+  },
+};
+
+// the field's own stream of randomness, kept apart from the layout's so a
+// harness that pins ?seed= sees the same beasts in the same order
+const beastRnd = mulberry32( ( ( params.seed | 0 ) * 7919 + 13 ) & 0x7fffffff );
+
+export const beasts = {
+  cap: params.beast, // ?beast= moves the population; 0 = no beasts
+  list: [], // the beasts standing in the stand right now
+  live: 0, // how many that is, kept in step with the list
+  loose: 0, // beasts the field has let loose this session
+  struck: 0, // strikes that landed on the hand
+  frightened: 0, // beasts the blade has driven off
+  driven: 0, // beasts the hand's own check has driven off, kept apart from the
+  // swipe's count so a harness told one number still reads that one number
+  hurt: 0, // hits the hand has landed on an animal, either answer either grade
+  felled: 0, // animals that came down, kept apart from the two counts above
+  // because an animal that only went off is not one that went down
+  felledAt: -1, // when the last of them came down
+  lastFell: "", // which species came down
+  paid: 0, // the coin the purse has taken off felled animals, kept apart from
+  // purse.earned so a harness can tell a kill's money from a cut's
+  struckAt: -1, // when the last one landed
+  last: "", // which species landed it
+  clock: 0, // seconds of field time the beasts have been walking
+  nextAt: BEAST_RULE.first, // when the next beast is asked for
+  struckPainted: false, // whether the bar is currently wearing the struck class
+};
+
+// the beasts' own nodes: one geometry per species, one material for all three,
+// and a pool of released meshes per species to answer the next spawn with, so
+// the stand never allocates a mesh per beast once it has been running
+const beastNodes = { mat: null, geo: {}, pool: {}, size: {} };
+
+// the bars the animals wear: one fixed pool of DOM nodes sized to the population
+// the stand can hold rather than to the one it happens to be holding, so an
+// animal writes a bar rather than allocating one and a stand that has never been
+// let loose in owns no nodes at all. The layer is pointer-transparent on the
+// same reason the burst's is - a gauge floating over an animal must never eat
+// the click that aims the check at that same animal
+const beastHpNodes = { layer: null, bar: null, fill: null, free: null };
+
+// the one product the bars are placed by, kept apart from the pick's so the two
+// passes never read each other's half-written matrix
+const beastMatrix = new THREE.Matrix4();
+
+// one primitive merged into a shared buffer under its own transform, so an
+// animal is one geometry: the same "nothing is an asset" rule the plants, the
+// sickle and the hills all already answer to. A part is a primitive, the colour
+// it wears, where it sits, how big it is and which way it is turned - front of
+// an animal is +z, the same way the camera's own forward is read, so a beast's
+// heading turns it to face where it is walking
+function mergeParts( parts ) {
+  const pos = [];
+  const nor = [];
+  const col = [];
+  const idx = [];
+  const dummy = new THREE.Object3D();
+  const mat = new THREE.Matrix4();
+  const nmat = new THREE.Matrix3();
+  const v = new THREE.Vector3();
+  let base = 0;
+  for ( const p of parts ) {
+    // a part that does not say where it sits, how big it is or which way it is
+    // turned is a unit primitive at the animal's own origin, at its own size,
+    // square to it - the parts that do say are the ones that matter: a tusk, a
+    // tongue, a bristle ridge
+    const at = p.at || [ 0, 0, 0 ];
+    const s = p.s || [ 1, 1, 1 ];
+    const r = p.r || [ 0, 0, 0 ];
+    dummy.position.set( at[ 0 ], at[ 1 ], at[ 2 ] );
+    dummy.rotation.set( r[ 0 ], r[ 1 ], r[ 2 ] );
+    dummy.scale.set( s[ 0 ], s[ 1 ], s[ 2 ] );
+    dummy.updateMatrix();
+    mat.copy( dummy.matrix );
+    nmat.getNormalMatrix( mat );
+    const g = p.g;
+    const pa = g.attributes.position.array;
+    const na = g.attributes.normal.array;
+    const ia = g.index ? g.index.array : null;
+    const c = p.c;
+    const count = pa.length / 3;
+    for ( let i = 0; i < count; i++ ) {
+      const k = i * 3;
+      v.set( pa[ k ], pa[ k + 1 ], pa[ k + 2 ] ).applyMatrix4( mat );
+      pos.push( v.x, v.y, v.z );
+      v.set( na[ k ], na[ k + 1 ], na[ k + 2 ] ).applyMatrix3( nmat );
+      const l = v.length() || 1;
+      nor.push( v.x / l, v.y / l, v.z / l );
+      col.push( c.r, c.g, c.b );
+    }
+    if ( ia ) {
+      for ( let i = 0; i < ia.length; i++ ) idx.push( base + ia[ i ] );
+    } else {
+      for ( let i = 0; i < count; i++ ) idx.push( base + i );
+    }
+    base += count;
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute( "position", new THREE.Float32BufferAttribute( pos, 3 ) );
+  geo.setAttribute( "normal", new THREE.Float32BufferAttribute( nor, 3 ) );
+  geo.setAttribute( "color", new THREE.Float32BufferAttribute( col, 3 ) );
+  geo.setIndex( idx );
+  return geo;
+}
+
+// the bear: a heavy barrel with a hump over the shoulders, a low head off the
+// front of it and four straight legs. At a metre and a bit at the shoulder it
+// reads over the top of the stand, which is what makes it the species a player
+// sees first rather than hears first
+function bearParts( u ) {
+  const fur = new THREE.Color( "#6a4a30" );
+  const dark = new THREE.Color( "#4a3423" );
+  const pale = new THREE.Color( "#8b6b4a" );
+  const nose = new THREE.Color( "#241c18" );
+  return [
+    // the body and the hump: the hump is the highest thing about a bear, and
+    // it is what a bear's outline is made of
+    { g: u.ball, c: fur, at: [ 0, 0.72, -0.06 ], s: [ 0.4, 0.34, 0.5 ] },
+    { g: u.ball, c: fur, at: [ 0, 0.98, 0.14 ], s: [ 0.34, 0.24, 0.3 ] },
+    // the head sits forward and low off the hump, with a pale muzzle and a
+    // nose at the very front of it
+    { g: u.ball, c: fur, at: [ 0, 0.94, 0.46 ], s: [ 0.22, 0.2, 0.22 ] },
+    { g: u.ball, c: pale, at: [ 0, 0.88, 0.66 ], s: [ 0.11, 0.09, 0.14 ] },
+    { g: u.ball, c: nose, at: [ 0, 0.9, 0.78 ], s: [ 0.045, 0.035, 0.05 ] },
+    // the ears are small and round, set wide on the head, which is what keeps
+    // a bear's head reading as a head rather than as a ball
+    { g: u.ball, c: dark, at: [ 0.17, 1.1, 0.42 ], s: [ 0.075, 0.075, 0.075 ] },
+    { g: u.ball, c: dark, at: [ -0.17, 1.1, 0.42 ], s: [ 0.075, 0.075, 0.075 ] },
+    // four legs: a bear walks on the whole foot rather than on its toes, so the
+    // hind legs are the thicker pair
+    { g: u.tube, c: dark, at: [ 0.2, 0.3, 0.34 ], s: [ 0.1, 0.3, 0.1 ] },
+    { g: u.tube, c: dark, at: [ -0.2, 0.3, 0.34 ], s: [ 0.1, 0.3, 0.1 ] },
+    { g: u.tube, c: dark, at: [ 0.21, 0.3, -0.36 ], s: [ 0.11, 0.32, 0.11 ] },
+    { g: u.tube, c: dark, at: [ -0.21, 0.3, -0.36 ], s: [ 0.11, 0.32, 0.11 ] },
+    { g: u.ball, c: dark, at: [ 0, 0.84, -0.56 ], s: [ 0.07, 0.07, 0.07 ] },
+  ];
+}
+
+// the boar: a low, bristle-backed barrel with a flat snout on the front of it
+// and two small tusks under that snout. At eighty centimetres it is the species
+// that hides in the stand the most, and the one whose tusks are the only part
+// of it that reads over the rice
+function boarParts( u ) {
+  const hide = new THREE.Color( "#4a423c" );
+  const dark = new THREE.Color( "#26221e" );
+  const tusk = new THREE.Color( "#ddd0b4" );
+  return [
+    { g: u.ball, c: hide, at: [ 0, 0.56, -0.04 ], s: [ 0.29, 0.25, 0.4 ] },
+    { g: u.ball, c: hide, at: [ 0, 0.62, 0.34 ], s: [ 0.18, 0.16, 0.18 ] },
+    // the snout is a disc on the head's own front rather than a nose cone,
+    // which is what a boar's profile is made of
+    { g: u.tube, c: dark, at: [ 0, 0.58, 0.52 ], s: [ 0.085, 0.09, 0.085 ], r: [ Math.PI / 2, 0, 0 ] },
+    { g: u.cone, c: tusk, at: [ 0.09, 0.56, 0.55 ], s: [ 0.028, 0.13, 0.028 ], r: [ 0.5, 0, -0.45 ] },
+    { g: u.cone, c: tusk, at: [ -0.09, 0.56, 0.55 ], s: [ 0.028, 0.13, 0.028 ], r: [ 0.5, 0, 0.45 ] },
+    { g: u.cone, c: dark, at: [ 0.1, 0.78, 0.3 ], s: [ 0.06, 0.12, 0.06 ], r: [ -0.35, 0, 0.2 ] },
+    { g: u.cone, c: dark, at: [ -0.1, 0.78, 0.3 ], s: [ 0.06, 0.12, 0.06 ], r: [ -0.35, 0, -0.2 ] },
+    // the bristle ridge: a thin slab standing a little off the back, which is
+    // what makes a boar's outline bristle rather than smooth
+    { g: u.slab, c: dark, at: [ 0, 0.82, -0.02 ], s: [ 0.05, 0.1, 0.46 ] },
+    { g: u.tube, c: dark, at: [ 0.15, 0.19, 0.26 ], s: [ 0.055, 0.19, 0.055 ] },
+    { g: u.tube, c: dark, at: [ -0.15, 0.19, 0.26 ], s: [ 0.055, 0.19, 0.055 ] },
+    { g: u.tube, c: dark, at: [ 0.16, 0.19, -0.28 ], s: [ 0.06, 0.19, 0.06 ] },
+    { g: u.tube, c: dark, at: [ -0.16, 0.19, -0.28 ], s: [ 0.06, 0.19, 0.06 ] },
+    { g: u.cone, c: dark, at: [ 0, 0.66, -0.42 ], s: [ 0.02, 0.12, 0.02 ], r: [ 2.5, 0, 0 ] },
+  ];
+}
+
+// the snake: a chain of spheres tapering from tail to head, curving sideways so
+// it reads as a body that has been dragged through the mud rather than as a
+// straight one. The forebody lifts, because a metre of rice hides a snake's own
+// length and the head has to come up out of the stand for the player to see it
+// at all - which is also what makes a snake the species that is heard before it
+// is seen
+function snakeParts( u ) {
+  const back = new THREE.Color( "#5f5a33" );
+  const belly = new THREE.Color( "#8a7f5c" );
+  const eye = new THREE.Color( "#1c1a16" );
+  const tongue = new THREE.Color( "#a8443a" );
+  const parts = [];
+  const coils = 11;
+  for ( let i = 0; i < coils; i++ ) {
+    const t = i / ( coils - 1 );
+    const r = 0.045 + t * 0.072;
+    const z = -0.66 + t * 1.16;
+    const x = Math.sin( t * 5.4 ) * 0.14 * ( 1 - t * 0.35 );
+    const y = r + 0.02 + ( t > 0.55 ? ( t - 0.55 ) * 1.9 : 0 );
+    parts.push( { g: u.ball, c: t > 0.5 ? back : belly, at: [ x, y, z ], s: [ r, r * 0.86, r * 1.3 ] } );
+  }
+  const hx = Math.sin( 5.4 ) * 0.14 * 0.65;
+  const hy = 0.117 + 0.02 + 0.45 * 1.9;
+  const hz = 0.5;
+  parts.push( { g: u.ball, c: back, at: [ hx, hy + 0.05, hz + 0.08 ], s: [ 0.12, 0.1, 0.16 ] } );
+  parts.push( { g: u.ball, c: eye, at: [ hx + 0.07, hy + 0.1, hz + 0.16 ], s: [ 0.026, 0.026, 0.026 ] } );
+  parts.push( { g: u.ball, c: eye, at: [ hx - 0.07, hy + 0.1, hz + 0.16 ], s: [ 0.026, 0.026, 0.026 ] } );
+  // the tongue is the only red on the animal, and it is what lets a player tell
+  // a snake's raised head from a bund's corner at a glance
+  parts.push( { g: u.cone, c: tongue, at: [ hx, hy + 0.02, hz + 0.26 ], s: [ 0.012, 0.1, 0.012 ], r: [ Math.PI / 2, 0, 0 ] } );
+  return parts;
+}
+
+// the beasts' nodes are built once: three merged geometries, one material for
+// all three, and an empty pool per species. Nothing is added to the scene until
+// a beast is actually let loose, so a field with ?beast=0 draws no more than it
+// did before
+export function buildBeasts() {
+  const u = {
+    // the unit primitives, reused at a scale per part: a sphere becomes a body,
+    // a tube becomes a leg, a cone becomes a tusk or a tongue
+    ball: new THREE.SphereGeometry( 1, 10, 7 ),
+    tube: new THREE.CylinderGeometry( 1, 1, 1, 8 ),
+    cone: new THREE.ConeGeometry( 1, 1, 7 ),
+    slab: new THREE.BoxGeometry( 1, 1, 1 ),
+  };
+  beastNodes.mat = new THREE.MeshLambertMaterial( { color: "#ffffff", vertexColors: true, fog: true } );
+  for ( const spec of BEASTS ) {
+    const parts = spec.id === "bear" ? bearParts( u ) : spec.id === "boar" ? boarParts( u ) : snakeParts( u );
+    const geo = beastNodes.geo[ spec.id ] = mergeParts( parts );
+    beastNodes.pool[ spec.id ] = [];
+    // the animal's own height off the ground and half-width, read off the merged
+    // geometry once rather than guessed per species, so the pick that decides
+    // what a click answers to has the body the animal actually wears
+    geo.computeBoundingBox();
+    beastNodes.size[ spec.id ] = {
+      h: geo.boundingBox.max.y,
+      w: Math.max( geo.boundingBox.max.x, geo.boundingBox.max.z ),
+    };
+  }
+}
+
+// a mesh for one beast: the released one of its species if the stand has one to
+// hand back, a new one otherwise. A beast is added to the scene the moment it is
+// let loose rather than hidden in it from the start, so the draw count the readout
+// prints is the field's own plus the beasts actually standing in it
+function takeBeastMesh( id ) {
+  const pool = beastNodes.pool[ id ];
+  const fresh = !pool.length;
+  const mesh = fresh ? new THREE.Mesh( beastNodes.geo[ id ], beastNodes.mat ) : pool.pop();
+  // YXZ rather than the default: a beast's heading is applied first and its
+  // wind-up pitch after it, so a bear rearing is a rear about its own side
+  // rather than a roll about the field's
+  mesh.rotation.order = "YXZ";
+  mesh.visible = true;
+  // a released mesh is still in the scene, wearing its invisible half of the
+  // frame, so only a new one is added to it - adding a mesh twice would draw it
+  // twice rather than once
+  if ( fresh ) scene.add( mesh );
+  return mesh;
+}
+
+// a beast that has walked clear out of the field's hearing is let go rather than
+// left to trail further and further out, so the stand never accumulates animals
+// the player can never come back to
+function releaseBeast( b ) {
+  b.mesh.visible = false;
+  beastNodes.pool[ b.spec.id ].push( b.mesh );
+  // the bar it wore goes back with the animal rather than with the next one of
+  // its species, so a released slot never leaves a gauge floating where an animal
+  // that is no longer standing used to be
+  freeBeastHpSlot( b );
+}
+
+// take the next free bar out of the pool, or -1 when the stand has asked for
+// more animals than the population it was told to hold. spawnBeast refuses at
+// that population, so in play the pool always has one left
+function takeBeastHpSlot() {
+  return beastHpNodes.free && beastHpNodes.free.length ? beastHpNodes.free.pop() : -1;
+}
+
+// put a bar back: the node is hidden here rather than at the next paint, so a
+// gauge never reads for one frame more than the animal that wore it
+function freeBeastHpSlot( b ) {
+  const i = b.slot;
+  if ( i === undefined || i < 0 ) return;
+  b.slot = -1;
+  if ( !beastHpNodes.free ) return;
+  beastHpNodes.free.push( i );
+  const bar = beastHpNodes.bar ? beastHpNodes.bar[ i ] : null;
+  if ( !bar ) return;
+  bar.style.display = "none";
+  bar.classList.remove( "low" );
+}
+
+export function clearBeasts() {
+  for ( const b of beasts.list ) releaseBeast( b );
+  beasts.list.length = 0;
+  beasts.live = 0;
+}
+
+// the bars the animals wear: the pool is sized to the population the stand can
+// hold rather than to the one it happens to be holding, so an animal writes a
+// bar rather than allocating one and a field with ?beast=0 owns no nodes at all.
+// Each bar is a frame with a fill inside it, the same shape the hand's own bar is
+// drawn in, so app.js writes one share per animal and the layout never moves
+export function buildBeastHp() {
+  const layer = document.getElementById( "beasthp" );
+  if ( !layer ) return;
+  beastHpNodes.layer = layer;
+  layer.hidden = true;
+  const cap = Math.max( 0, beasts.cap | 0 );
+  beastHpNodes.bar = new Array( cap );
+  beastHpNodes.fill = new Array( cap );
+  beastHpNodes.free = [];
+  for ( let i = 0; i < cap; i++ ) {
+    const bar = document.createElement( "div" );
+    bar.className = "bhp";
+    bar.style.display = "none";
+    const fill = document.createElement( "div" );
+    // the hand starts an animal at the top of its hide, so the bar reads full
+    // before app.js has written a share into it - the same reason the hand's own
+    // bar does, and the same reason a fresh animal is never a felled one
+    fill.className = "fill";
+    fill.style.width = "100%";
+    bar.appendChild( fill );
+    layer.appendChild( bar );
+    beastHpNodes.bar[ i ] = bar;
+    beastHpNodes.fill[ i ] = fill;
+    beastHpNodes.free.push( i );
+  }
+}
+
+// paint the bars the standing animals wear: each is placed over the top of the
+// body it belongs to by the same product the pick runs and the same pixel
+// convention, so the gauge on the glass and the animal under it are the same
+// point rather than a guess. An animal behind the eye or off the glass hides its
+// bar rather than leaving a gauge pinned to the edge of the frame, which is what
+// keeps a beast walking out of view from reading as one standing at the side
+export function paintBeastHp() {
+  const layer = beastHpNodes.layer;
+  if ( !layer || !beastHpNodes.bar ) return;
+  if ( !beasts.list.length ) {
+    // the layer hides itself while the stand holds nothing, on the same reason
+    // the burst's does: a field with no wildlife in it owns no compositor layer
+    if ( !layer.hidden ) layer.hidden = true;
+    return;
+  }
+  layer.hidden = false;
+  const el = document.getElementById( "scene-canvas" );
+  if ( !el ) return;
+  const r = el.getBoundingClientRect();
+  const w = r.width;
+  const h = r.height;
+  if ( w <= 0 || h <= 0 ) return;
+  beastMatrix.copy( camera.projectionMatrix ).multiply( camera.matrixWorldInverse );
+  const e = beastMatrix.elements;
+  for ( const b of beasts.list ) {
+    const i = b.slot;
+    if ( i === undefined || i < 0 || i >= beastHpNodes.bar.length ) continue;
+    const bar = beastHpNodes.bar[ i ];
+    const size = beastNodes.size[ b.spec.id ];
+    const base = floorTop( b.x, b.z );
+    const top = base + size.h;
+    const rw = e[ 3 ] * b.x + e[ 7 ] * top + e[ 11 ] * b.z + e[ 15 ];
+    if ( rw <= 0.05 ) {
+      bar.style.display = "none"; // the animal is behind the eye
+      continue;
+    }
+    const x = ( ( e[ 0 ] * b.x + e[ 4 ] * top + e[ 8 ] * b.z + e[ 12 ] ) / rw * 0.5 + 0.5 ) * w;
+    const y = ( 0.5 - ( e[ 1 ] * b.x + e[ 5 ] * top + e[ 9 ] * b.z + e[ 13 ] ) / rw * 0.5 ) * h;
+    if ( x < -60 || x > w + 60 || y < -40 || y > h + 40 ) {
+      bar.style.display = "none";
+      continue;
+    }
+    bar.style.display = "";
+    bar.style.left = x.toFixed( 0 ) + "px";
+    bar.style.top = y.toFixed( 0 ) + "px";
+    // the fill is a share of the frame rather than a bar of its own width, so
+    // app.js writes one number per animal. The hide is the animal's own rather
+    // than the species' table, so an animal that has been hit reads against the
+    // hide it started with rather than against a number the player has to look up
+    const share = b.maxHp > 0 ? b.hp / b.maxHp : 0;
+    beastHpNodes.fill[ i ].style.width = Math.round( 100 * share ) + "%";
+    // under a third of its hide the bar wears the same rust the shop prices a
+    // refused piece in, so an animal that is nearly down says so on the glass
+    // rather than leaving the player to measure the fill's edge. A hide at none
+    // left is not rusted: the animal is not standing any more
+    bar.classList.toggle( "low", share > 0 && share <= 1 / 3 );
+  }
+}
+
+// let another beast loose through the stand. It arrives at a random bearing and
+// a random distance out of the player's own - far enough to have been heard
+// rather than seen, close enough that the field it is walking across is the
+// field the player is standing in - and it arrives facing the player, because a
+// beast that has come to find them has not come to walk away from them
+export function spawnBeast() {
+  if ( beasts.live >= beasts.cap ) return false;
+  const spec = BEASTS[ Math.floor( beastRnd() * BEASTS.length ) % BEASTS.length ];
+  const px = camera.position.x;
+  const pz = camera.position.z;
+  let x = px;
+  let z = pz;
+  for ( let attempt = 0; attempt < 10; attempt++ ) {
+    const a = beastRnd() * Math.PI * 2;
+    const r = 13 + beastRnd() * 17;
+    x = px + Math.sin( a ) * r;
+    z = pz + Math.cos( a ) * r;
+    if ( x < BEAST_RULE.minX || x > BEAST_RULE.maxX || z < BEAST_RULE.minZ || z > BEAST_RULE.maxZ ) continue;
+    if ( Math.hypot( x - px, z - pz ) >= 11 ) break;
+  }
+  // a beast whose bearing put it past the tree line still has to have ground to
+  // run on, so the position is walked back inside the stand's own edges
+  x = Math.min( BEAST_RULE.maxX, Math.max( BEAST_RULE.minX, x ) );
+  z = Math.min( BEAST_RULE.maxZ, Math.max( BEAST_RULE.minZ, z ) );
+  const b = {
+    spec,
+    mesh: takeBeastMesh( spec.id ),
+    x,
+    z,
+    heading: Math.atan2( px - x, pz - z ),
+    state: "", // "" is a beast with no attack in progress; wind, strike and cool are
+    timer: 0.4 + beastRnd() * 1.6, // the phase clock, or the roam's own re-pick timer
+    cool: 0, // seconds until it will answer another bite
+    phase: beastRnd() * 6.2832, // where in its gait it is, seeded so a herd is not in step
+    bob: 0,
+    roll: 0,
+    pitch: 0,
+    sway: 0,
+    // the animal's own hide, seeded from its species rather than invented per
+    // animal, so a harness that pins ?seed= sees the same beasts with the same
+    // hides. maxHp is kept beside hp because the bar on the glass is a share of
+    // the hide the animal started with rather than a share of a table
+    hp: spec.hp,
+    maxHp: spec.hp,
+    hurtAt: -1, // when the hand last landed on it, -1 before the first hit
+    slot: takeBeastHpSlot(), // which of the pool's bars this animal wears
+  };
+  beasts.list.push( b );
+  beasts.live = beasts.list.length;
+  beasts.loose = beasts.loose + 1;
+  return true;
+}
+
+// a strike landing on the hand: the damage goes through hurt(), which is the one
+// ledger the bar on the glass, the ration and the collapse already answer to, so
+// a beast never has to know anything about health of its own
+function bite( b, spec ) {
+  hurt( spec.damage );
+  playSound( SOUND.hurt, spec.id );
+  beasts.struck = beasts.struck + 1;
+  beasts.struckAt = performance.now();
+  beasts.last = spec.id;
+  b.cool = spec.cool;
+}
+
+// the bar wears a struck class for a moment after a strike lands, which is what
+// lets a player see that the drop in the hand was an animal rather than a
+// misjudged cut - the class is only ever worn, never counted, so the bar's own
+// low class and the readout's number are untouched
+export function paintStruck() {
+  const bar = healthNodes.bar || ( healthNodes.bar = document.getElementById( "health" ) );
+  if ( !bar ) return;
+  const fresh = beasts.struckAt >= 0 && performance.now() - beasts.struckAt < 900;
+  if ( fresh === beasts.struckPainted ) return;
+  beasts.struckPainted = fresh;
+  bar.classList.toggle( "struck", fresh );
+}
+
+// put coin into the purse from something that is not a cut: the ledger moves the
+// same way earnGold moves it, but the run does not, since a felled animal is not
+// a grade and a kill must neither dress nor extend a streak - the purse grows
+// from the stand's own wildlife while the reap's run stays the reap's
+export function giveGold( amount ) {
+  purse.earned = purse.earned + amount;
+  purse.gold = purse.earned - purse.spent;
+  beasts.paid = beasts.paid + amount;
+  return amount;
+}
+
+// an animal that has come down: it leaves the stand the same way one that has
+// walked out of the field's hearing does, so its mesh goes back to the pool and
+// the bar it wore goes back with it, and its hide is worth the coin its species
+// names. Nothing about the cut changes: the harvest counts, the grade table and
+// the combo run stay where the reap left them, which is what keeps a kill a
+// second answer rather than a dressed cut
+function fellBeast( b ) {
+  const i = beasts.list.indexOf( b );
+  if ( i < 0 ) return false;
+  releaseBeast( b );
+  beasts.list.splice( i, 1 );
+  beasts.live = beasts.list.length;
+  beasts.felled = beasts.felled + 1;
+  beasts.felledAt = performance.now();
+  beasts.lastFell = b.spec.id;
+  giveGold( b.spec.gold );
+  // the great-cut cue keyed by the species: the same "one cue rather than three"
+  // rule a strike already answers with, so a fall is audible as something landing
+  // rather than as a third sound the field has never made
+  playSound( SOUND.great, b.spec.id );
+  return true;
+}
+
+// land a hit on an animal: the number is what the hand's answer is worth, and the
+// animal either takes it and stays standing or comes down. Returns true when the
+// animal went down, so a caller knows there is nothing left to drive off. The
+// animal's own hide is the only ledger here - the hand pays nothing for touching
+// an animal, which is what keeps attacking one a decision about the purse rather
+// than about the day
+export function damageBeast( b, amount ) {
+  if ( !b || beasts.list.indexOf( b ) < 0 ) return false;
+  b.hp = Math.max( 0, b.hp - amount );
+  b.hurtAt = performance.now();
+  beasts.hurt = beasts.hurt + 1;
+  if ( b.hp > 0 ) return false;
+  return fellBeast( b );
+}
+
+// the blade at arm's length answers an animal as well as the stand: a swipe
+// ending with beasts inside the ring lands one hit on EVERY animal standing in
+// it, so the hand attacks all of the beasts the arm covers at once rather than
+// the nearest one alone. An animal that survives the hit is driven off as it
+// always was; one whose hide the hit brings down leaves the stand and pays its
+// species' coin. It runs after the reap rather than inside it, so the plants the
+// swipe took and the fee it paid are exactly as they were
+export function frightenBeasts() {
+  // walked backwards because a fall splices the roster down: the entries above
+  // the splice have already been answered, the ones below it have not moved
+  for ( let i = beasts.list.length - 1; i >= 0; i-- ) {
+    const b = beasts.list[ i ];
+    if ( fromPlayerD2( b.x, b.z ) > hand.reach2 ) continue;
+    // the hit goes first, so a fall is a fall rather than a drive-off that
+    // happens to leave an animal with no hide left
+    if ( damageBeast( b, BEAST_RULE.attack.blade ) ) continue;
+    // the strike it was winding up is broken, and the beast turns and goes
+    b.state = "cool";
+    b.timer = b.spec.cool * 0.6;
+    b.cool = b.spec.cool;
+    b.heading = Math.atan2( b.x - camera.position.x, b.z - camera.position.z );
+    beasts.frightened = beasts.frightened + 1;
+  }
+}
+
+// the hand's own answer to one animal: the check the cursor was aimed at pays one
+// animal a grade-scaled hit rather than every animal in the ring, and the grade
+// decides both how hard it landed and - when the animal survives - how far it
+// goes and how long it stays put. A hit that brings the animal down takes it out
+// of the stand and pays its species' coin through the purse; a hit that does not
+// only drives it off. Either way the harvest counts and the combo run stay where
+// the cut's own table left them, so the purse is the one ledger a kill moves
+export function strikeBeast( b, grade ) {
+  // the animal can have walked out of the stand between the arm and the click
+  // that played it, in which case there is nothing here to answer
+  if ( !b || beasts.list.indexOf( b ) < 0 ) return false;
+  // the hit goes first, so a fall is a fall rather than a drive-off that happens
+  // to leave an animal with no hide left
+  if ( damageBeast( b, BEAST_RULE.attack.hit[ grade ] ) ) return true;
+  const spec = b.spec;
+  // the strike it was winding up is broken and the animal turns and goes: the
+  // same answer the swipe gives it at arm's length, dressed by the grade
+  b.state = "cool";
+  b.timer = spec.cool * 0.6;
+  b.cool = spec.cool + BEAST_RULE.attack.cool[ grade ];
+  b.heading = Math.atan2( b.x - camera.position.x, b.z - camera.position.z );
+  // the grade also decides how far back it goes, walked back inside the stand's
+  // own edges so a shove cannot push an animal past the tree line
+  const shove = BEAST_RULE.attack.shove[ grade ];
+  b.x = Math.min( BEAST_RULE.maxX, Math.max( BEAST_RULE.minX, b.x + Math.sin( b.heading ) * shove ) );
+  b.z = Math.min( BEAST_RULE.maxZ, Math.max( BEAST_RULE.minZ, b.z + Math.cos( b.heading ) * shove ) );
+  beasts.driven = beasts.driven + 1;
+  return true;
+}
+
+// the beasts walk on the field's own capped step, so a paused stand holds them
+// with the stalks and a stalled tab does not teleport a bear across the plot
+export function stepBeasts( dt ) {
+  const px = camera.position.x;
+  const pz = camera.position.z;
+  beasts.clock += dt;
+  // the field lets another beast loose on its own clock until the population
+  // named in the url is standing in the stand. spawnBeast refuses when the stand
+  // is already holding that many, so this loop is one beat rather than a queue
+  while ( beasts.clock >= beasts.nextAt ) {
+    spawnBeast();
+    beasts.nextAt = beasts.clock + BEAST_RULE.every[ 0 ] + beastRnd() * ( BEAST_RULE.every[ 1 ] - BEAST_RULE.every[ 0 ] );
+  }
+  for ( let i = beasts.list.length - 1; i >= 0; i-- ) {
+    const b = beasts.list[ i ];
+    const spec = b.spec;
+    b.timer -= dt;
+    b.cool = Math.max( 0, b.cool - dt );
+
+    let dx = px - b.x;
+    let dz = pz - b.z;
+    let d2 = dx * dx + dz * dz;
+
+    // a beast that has wandered clear out of the field's hearing is let go, so
+    // the stand never accumulates animals the player can never come back to
+    if ( d2 > BEAST_RULE.leave * BEAST_RULE.leave ) {
+      releaseBeast( b );
+      beasts.list.splice( i, 1 );
+      beasts.live = beasts.list.length;
+      continue;
+    }
+
+    // a body lying in the mud is not a meal: the beasts lose interest in it and
+    // drift off, which is what keeps a collapse from reading as a feeding
+    const hunting = !health.dead;
+    let gait = 0; // 0..1 of the species' own pace
+    let want = b.heading;
+
+    if ( b.state === "" ) {
+      if ( hunting && d2 <= spec.aggro * spec.aggro ) {
+        want = Math.atan2( dx, dz );
+        gait = 1;
+        if ( d2 <= spec.reach * spec.reach && b.cool <= 0 ) {
+          // at arm's length the beast winds up rather than biting on the spot,
+          // which is what lets a player who is already walking back out of it
+          // still get away
+          b.state = "wind";
+          b.timer = spec.wind;
+          gait = 0.12;
+        }
+      } else {
+        if ( b.timer <= 0 ) {
+          b.timer = 1.2 + beastRnd() * 2.4;
+          b.heading += ( beastRnd() - 0.5 ) * 2.2;
+        }
+        if ( !hunting && d2 < 900 ) want = Math.atan2( -dx, -dz );
+        gait = 0.42;
+      }
+    } else if ( b.state === "cool" ) {
+      if ( b.timer <= 0 ) {
+        b.state = "";
+        b.timer = 0.6 + beastRnd() * 1.4;
+      }
+      want = Math.atan2( -dx, -dz );
+      gait = 0.5;
+    } else if ( b.state === "wind" ) {
+      if ( b.timer <= 0 ) {
+        b.state = "strike";
+        b.timer = BEAST_RULE.strike;
+      }
+      gait = 0.12;
+    }
+
+    // the turn: a beast turns at its own rate rather than snapping to its target,
+    // which is what lets a player step aside from a charge
+    let da = want - b.heading;
+    while ( da > Math.PI ) da -= 6.2832;
+    while ( da < -Math.PI ) da += 6.2832;
+    const turn = spec.turn * dt;
+    b.heading += Math.max( -turn, Math.min( turn, da ) );
+
+    // the step: a strike is a dash rather than a walk, so the bite lands at the
+    // far end of it and a player who has turned aside is missed
+    if ( b.state === "strike" ) {
+      const dash = spec.lunge * dt / BEAST_RULE.strike;
+      b.x += Math.sin( b.heading ) * dash;
+      b.z += Math.cos( b.heading ) * dash;
+      if ( b.timer <= 0 ) {
+        dx = px - b.x;
+        dz = pz - b.z;
+        d2 = dx * dx + dz * dz;
+        if ( !health.dead && d2 <= spec.reach * spec.reach ) bite( b, spec );
+        b.state = "cool";
+        b.timer = spec.cool;
+      }
+    } else if ( gait > 0 ) {
+      const step = spec.speed * gait * dt;
+      b.x += Math.sin( b.heading ) * step;
+      b.z += Math.cos( b.heading ) * step;
+    }
+
+    // a beast that has walked up to the stand's own edge turns back rather than
+    // grinding along the tree line
+    const ex = Math.min( BEAST_RULE.maxX, Math.max( BEAST_RULE.minX, b.x ) );
+    const ez = Math.min( BEAST_RULE.maxZ, Math.max( BEAST_RULE.minZ, b.z ) );
+    if ( ex !== b.x || ez !== b.z ) {
+      b.x = ex;
+      b.z = ez;
+      b.heading = Math.atan2( -Math.sin( b.heading ), -Math.cos( b.heading ) );
+    }
+
+    // the gait: a quadruped bobs and lists on it, a snake sways. The amplitudes
+    // are the species' own, which is why a snake reads as a body being dragged
+    // rather than as an animal walking
+    b.phase += dt * spec.gaitRate * ( 0.3 + gait );
+    const swing = Math.sin( b.phase );
+    const lift = Math.abs( Math.cos( b.phase ) );
+    const amp = 0.3 + gait;
+    b.bob = lift * spec.bob * amp;
+    b.roll = swing * spec.roll * amp;
+    b.sway = swing * spec.sway * amp;
+    if ( b.state === "wind" ) {
+      // the wind-up: the forehand comes off the ground, which is the one thing
+      // a player can see a strike is made of
+      const w = 1 - Math.max( 0, b.timer ) / spec.wind;
+      b.pitch = -spec.rear * w;
+    } else if ( b.state === "strike" ) {
+      const k = 1 - Math.max( 0, b.timer ) / BEAST_RULE.strike;
+      b.pitch = spec.rear * ( 1.5 * k - 0.6 );
+    } else {
+      b.pitch = swing * spec.bob * 1.4 * amp;
+    }
+
+    // the beast stands on the mud at the field's own floor, so it takes the
+    // field's own lights, fog and ground rather than a flat plane of its own
+    b.mesh.position.set( b.x, floorTop( b.x, b.z ) + b.bob, b.z );
+    b.mesh.rotation.set( b.pitch, b.heading + b.sway, b.roll );
+  }
+  paintStruck();
 }
 
 export function buildField() {
@@ -3341,6 +4322,54 @@ export function wireUI() {
     setHover( bestTier, bestIndex, bestHeight );
   }
 
+  // the animal under the cursor: the same screen-space reading pickPlant takes of
+  // a stem, against the animal's own body rather than a stalk. A beast is a
+  // scene object rather than an instance, so there is no per-instance flag to
+  // light for it - the pick only decides what the next click answers to, and it
+  // answers to the animal ahead of the plant standing behind it. The body is a
+  // straight segment from the mud to the top of the merged geometry, which is
+  // what an animal is: it does not bend like a stem, it bobs. The ring is wider
+  // than a stem's 13 px because an animal is wider than a stalk and because a
+  // hand aimed at a beast is a hand that has to be able to reach it.
+  function pickBeast( cx, cy, w, h ) {
+    hover.beast = null;
+    hover.beastX = -1;
+    hover.beastY = -1;
+    if ( !beasts.list.length ) return;
+    pickMatrix.copy( camera.projectionMatrix ).multiply( camera.matrixWorldInverse );
+    const e = pickMatrix.elements;
+    const ex = camera.position.x;
+    const ez = camera.position.z;
+    let best = BEAST_RULE.attack.pick; // only an animal this close on the glass counts
+    let winner = null;
+    let wx = 0;
+    let wy = 0;
+    for ( const b of beasts.list ) {
+      const size = beastNodes.size[ b.spec.id ];
+      const base = floorTop( b.x, b.z );
+      const rw = e[ 3 ] * b.x + e[ 7 ] * base + e[ 11 ] * b.z + e[ 15 ];
+      if ( rw <= 0.05 ) continue; // the animal is behind the eye
+      const rx = ( ( e[ 0 ] * b.x + e[ 4 ] * base + e[ 8 ] * b.z + e[ 12 ] ) / rw * 0.5 + 0.5 ) * w;
+      const ry = ( 0.5 - ( e[ 1 ] * b.x + e[ 5 ] * base + e[ 9 ] * b.z + e[ 13 ] ) / rw * 0.5 ) * h;
+      const top = base + size.h;
+      const tx = ( ( e[ 0 ] * b.x + e[ 4 ] * top + e[ 8 ] * b.z + e[ 12 ] ) / rw * 0.5 + 0.5 ) * w;
+      const ty = ( 0.5 - ( e[ 1 ] * b.x + e[ 5 ] * top + e[ 9 ] * b.z + e[ 13 ] ) / rw * 0.5 ) * h;
+      const d2 = pointSegD2( cx, cy, rx, ry, tx, ty );
+      // the same slight bias toward nearer animals the plant pick carries, so an
+      // animal far behind another does not win when both sit under the cursor
+      const d = Math.sqrt( d2 ) + Math.hypot( b.x - ex, b.z - ez ) * 0.02;
+      if ( d < best ) {
+        best = d;
+        winner = b;
+        wx = ( rx + tx ) * 0.5;
+        wy = ( ry + ty ) * 0.5;
+      }
+    }
+    hover.beast = winner;
+    hover.beastX = wx;
+    hover.beastY = wy;
+  }
+
 
   // Pointer: a bare move never touches the camera. Only a held button drags,
   // and a drag grabs the world: dragging right slides the scenery right, which
@@ -3356,6 +4385,9 @@ export function wireUI() {
       const r = canvas.getBoundingClientRect();
       if ( r.width <= 0 || r.height <= 0 ) return;
       pickPlant( e.clientX - r.left, e.clientY - r.top, r.width, r.height );
+      // the animal's own pick runs after the plant's, so a click answers to
+      // whichever of the two the cursor is nearer rather than to the stand alone
+      pickBeast( e.clientX - r.left, e.clientY - r.top, r.width, r.height );
       // With the sickle drawn the press belongs to the blade, not to the check:
       // it puts the tip on the glass and starts a swipe, and the drag that
       // follows draws the line rather than turning the view. A cursor and a
@@ -3375,7 +4407,7 @@ export function wireUI() {
         return;
       }
       if ( skill.active ) resolveSkill();
-      else if ( hover.tier >= 0 ) armSkill();
+      else if ( hover.beast || hover.tier >= 0 ) armSkill();
     } );
     canvas.addEventListener( "pointermove", ( e ) => {
       const r = canvas.getBoundingClientRect();
@@ -3383,6 +4415,7 @@ export function wireUI() {
         cam.mouse.x = ( e.clientX - r.left ) / r.width * 2 - 1;
         cam.mouse.y = -( ( e.clientY - r.top ) / r.height * 2 - 1 );
         pickPlant( e.clientX - r.left, e.clientY - r.top, r.width, r.height );
+        pickBeast( e.clientX - r.left, e.clientY - r.top, r.width, r.height );
       }
       if ( cam.tap ) {
         cam.tap.moved += Math.hypot( e.clientX - cam.tap.x, e.clientY - cam.tap.y );
@@ -3425,18 +4458,25 @@ export function wireUI() {
       // spends a check
       if ( held > TOUCH.tapMs || slid > TOUCH.tapPx ) return;
       // a tap: re-pick where the finger left the glass so the check binds to the
-      // plant under the tap rather than wherever the finger drifted
+      // plant under the tap rather than wherever the finger drifted, and to the
+      // animal under it if an animal is what the finger left on
       const r = canvas.getBoundingClientRect();
       if ( r.width <= 0 || r.height <= 0 ) return;
       pickPlant( e.clientX - r.left, e.clientY - r.top, r.width, r.height );
+      pickBeast( e.clientX - r.left, e.clientY - r.top, r.width, r.height );
       if ( skill.active ) resolveSkill();
-      else if ( hover.tier >= 0 ) armSkill();
+      else if ( hover.beast || hover.tier >= 0 ) armSkill();
     } );
     canvas.addEventListener( "pointerleave", ( e ) => {
       cam.drag = null;
       cam.tap = null; // a finger that left the field mid-touch is not a tap
       if ( state.sickle ) endStroke(); // a hand that left the glass spent the swipe
       setHover( -1, -1, 0 ); // the pointer left the field: nothing is outlined
+      // and no animal is answered to: the pick is the cursor's, so leaving the
+      // glass clears it rather than leaving a beast armed at the last place seen
+      hover.beast = null;
+      hover.beastX = -1;
+      hover.beastY = -1;
     } );
     // the panel sits on top of the canvas, so a pointer that lands on it never
     // reaches the canvas listener and the pick would stay lit while the cursor
@@ -3444,7 +4484,14 @@ export function wireUI() {
     // whatever is under the pointer, so anything that is not the canvas clears
     // the pick - the drag above is unaffected, it reads cam.drag, not the pick
     window.addEventListener( "pointermove", ( e ) => {
-      if ( e.target !== canvas ) setHover( -1, -1, 0 );
+      if ( e.target !== canvas ) {
+        setHover( -1, -1, 0 );
+        // the animal pick is the cursor's own, so a pointer that has moved onto
+        // the panel is not a hand aimed at a beast
+        hover.beast = null;
+        hover.beastX = -1;
+        hover.beastY = -1;
+      }
     } );
   }
 }
@@ -3500,6 +4547,14 @@ export function frame( now ) {
   // rather than the capped step so the fall is the same length at any frame rate
   stepFall( raw );
   applyCamera();
+  // the field's own wildlife walks on the environment's clock, so a paused stand
+  // holds the beasts with the stalks - and it reads the player's seat only once
+  // the camera has actually been put where the walk says it is
+  if ( !state.paused ) stepBeasts( dt );
+  // the bars the animals wear are DOM rather than geometry, so they are painted
+  // on the same pass as the rest of the glass - and outside the pause guard,
+  // since a paused stand still shows what each animal has left of its hide
+  paintBeastHp();
   // the held item rides the camera, so it follows the framing whether the
   // environment is paused or running - the arm belongs to the viewer, not to the
   // field's own clock
@@ -3569,6 +4624,32 @@ export function frame( now ) {
         // runs, so the readout says which half of it the player is watching
         // rather than naming a state the picture has not reached yet
         ( health.dead ? ( health.fall < 1 ? " · falling" : " · down" ) : "" ) +
+        // the field's own wildlife: named only while there is something standing
+        // in the stand, which is what keeps a field that has never been let
+        // loose in reading the way it did before
+        ( beasts.live > 0 ? " · beasts " + beasts.live : "" ) +
+        // the strike that just landed: the bar on the glass flashes with it, so
+        // the readout names the animal that paid it for as long as it is fresh -
+        // otherwise a drop in the hand would read as a misjudged cut
+        ( performance.now() - beasts.struckAt < 1200 ? " · struck by " + beasts.last : "" ) +
+        // an animal the hand's own check has driven off: named once any has
+        // been, so the field's own wildlife reads as answered rather than as
+        // only ever biting. It is kept apart from the blade's own count, since
+        // the two answers are two answers rather than one tally
+        ( beasts.driven > 0 ? " · driven " + beasts.driven : "" ) +
+        // an animal the hand brought down rather than only drove off: named once
+        // any has, so the stand reads as answered rather than as only ever biting,
+        // and the fall is kept apart from the two drive-offs above because an
+        // animal that went down is not one that only went off
+        ( beasts.felled > 0 ? " · felled " + beasts.felled : "" ) +
+        // the coin the purse has taken off those falls: kept apart from the gold
+        // the cuts have paid so the readout says which of the two the purse grew
+        // from, and named only once a kill has actually paid
+        ( beasts.paid > 0 ? " · from hides " + beasts.paid : "" ) +
+        // the fall that just happened: the bar over the animal goes away with it
+        // and the purse takes the coin up, so the readout names the species that
+        // paid it for as long as the fall is fresh
+        ( performance.now() - beasts.felledAt < 1200 ? " · felled " + beasts.lastFell : "" ) +
         // the run the player is in: the count the verdict and the purse both
         // answer to, so a harness can read the streak rather than infer it from
         // the gold a cut paid. It stays out of the readout until the run is a
@@ -3610,6 +4691,13 @@ export function frame( now ) {
 export function start() {
   build();
   buildField();
+  // the beasts' geometries are merged once at start rather than at the first
+  // spawn, so the first bear the stand lets loose costs the same as the tenth
+  buildBeasts();
+  // the bars the animals wear are built at start rather than at the first spawn,
+  // so the first beast the stand lets loose wears a bar the same way the tenth
+  // one does
+  buildBeastHp();
   wireUI();
   // the burst's node pool is built at start rather than at the first cut, so
   // the first pass through the field answers the same way the hundredth does
@@ -3626,6 +4714,11 @@ export function start() {
       resetWalk,
       cam,
       camera,
+      // the framing the camera runs on, so a harness can turn the view onto an
+      // animal rather than wait for one to walk into frame: the bars the animals
+      // wear are pinned to the camera, so a leg that reads them back needs the
+      // glass over a body to read against
+      applyCamera,
       state,
       uniforms,
       field,
@@ -3667,6 +4760,30 @@ export function start() {
       FALL,
       downPlayer,
       stepFall,
+      // the field's own wildlife: its state, its table, its rule and the halves
+      // that let a beast loose, walk the stand, clear it and drive a beast off -
+      // by the blade or by the check aimed at one - so a harness can prove a
+      // bear reached the hand and paid its damage off the hand's own ledger
+      // rather than watch for one in a screenshot
+      beasts,
+      BEASTS,
+      BEAST_RULE,
+      spawnBeast,
+      stepBeasts,
+      clearBeasts,
+      frightenBeasts,
+      strikeBeast,
+      // the animals' own hides: the hit that lands on one, the fall that takes it
+      // out of the stand, the coin a fall pays into the purse and the two halves
+      // that build and paint the bars the animals wear - so a harness can prove
+      // an attack spent an animal's hide rather than its day, that a fall left
+      // the roster rather than an animal standing at zero, and read a bar's share
+      // back out of the markup rather than out of a screenshot
+      damageBeast,
+      fellBeast,
+      giveGold,
+      buildBeastHp,
+      paintBeastHp,
       // the hour's own two halves, so a harness can walk the field one hour at
       // a time rather than wait out a minute for the page to do it
       advanceLight,

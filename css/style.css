@@ -318,6 +318,75 @@ html.touch .shopcard {
   background: #c98b5e;
 }
 
+.health.struck {
+  /* a strike from an animal rather than a tired hand: the frame rather than the
+     fill wears the rust, so the bar says something was let loose through the
+     stand rather than that the day is nearly spent. app.js wears it for a moment
+     after a strike lands and never counts it, so the fill's own width, the low
+     class and the readout's number are untouched by this */
+  border: 1px solid #c98b5e;
+  box-shadow: 0 0 7px rgba(201, 139, 94, 0.85);
+}
+
+/* ------------------------------------------------ the animals' own bars --- */
+/* The hides the wildlife wears. One fixed layer over the whole glass, pointer-
+   transparent on the same reason the burst's is: a gauge floating over an animal
+   must never eat the click that aims the check at that same animal, which is the
+   one thing that would otherwise leave the animals unattackable. The layer holds
+   a fixed pool of bars app.js reuses and hides itself while the stand is empty,
+   so a field with no wildlife in it - or one with ?beast=0 - owns no compositor
+   layer at all. */
+.beasthp {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  pointer-events: none;
+  z-index: 6;
+}
+
+/* the frame an animal's hide is read against: narrow and short rather than the
+   hand's own 150 px, since this is one animal's rather than the player's day and
+   it has to sit over a body a metre of rice is hiding. The frame is centred on
+   the point app.js writes, so the bar tracks the animal rather than trailing it.
+   The node is hidden by app.js rather than here, so a shown bar and a hidden one
+   are the same rule rather than a stylesheet that the inline write cannot undo */
+.beasthp .bhp {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 34px;
+  height: 6px;
+  margin-left: -17px;
+  margin-top: -13px;
+  border-radius: 3px;
+  background: rgba(11, 22, 16, 0.72);
+  border: 1px solid var(--panel-line);
+}
+
+/* the share of the hide left: the fill is a share of the frame rather than a bar
+   of its own width, so app.js writes one number per animal and the layout never
+   moves. It wears the same accent the hand's own bar does, since a full hide and
+   a full day are the same thing read off the same kind of gauge */
+.beasthp .bhp .fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  border-radius: 2px;
+  background: var(--accent);
+  width: 100%;
+}
+
+/* under a third of its hide the bar wears the same rust the shop prices a
+   refused piece in and the hand's own bar wears when the day is nearly spent,
+   so an animal that is nearly down says so on the glass rather than leaving the
+   player to measure the fill's edge against the frame. A hide at none left is
+   left out rather than rusted: the animal is not standing any more */
+.beasthp .bhp.low .fill {
+  background: #c98b5e;
+}
+
 /* ---------------------------------------------------------- touch pad -- */
 /* app.js puts .touch on <html> when a coarse pointer is detected (or when
    ?touch=1 forces it on a desktop). Every rule below is keyed on that class,
@@ -432,10 +501,11 @@ html.touch .stats {
 }
 
 /* ------------------------------------------------------- skill check ----- */
-/* The meter floats over the canvas where the plant was clicked. It is DOM
-   rather than geometry, and it has to stay click-through: the second click
-   that plays the check must reach the canvas listener, not land on the meter,
-   which is what pointer-events: none buys here. */
+/* The meter floats over the canvas where the click landed - on a stalk or on an
+   animal standing in the stand, since both checks the hand makes share one
+   gauge. It is DOM rather than geometry, and it has to stay click-through: the
+   second click that plays the check must reach the canvas listener, not land on
+   the meter, which is what pointer-events: none buys here. */
 .skill {
   position: fixed;
   left: 0;
