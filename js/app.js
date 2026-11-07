@@ -1439,8 +1439,9 @@ export const skill = {
   // line rather than for one stalk or one animal
   target: "",
   // seconds this check's needle takes to cross the track: the cut's own 1.5 s
-  // for a stalk, the animal's shorter sweep for a beast. Kept on the check so
-  // the one line that advances the needle never has to know which it is on
+  // for a stalk, the animal's shorter sweep for a beast and the nick's own, kept
+  // apart from the fifth its line is capped at. Kept on the check so the one line
+  // that advances the needle never has to know which it is on
   sweep: SKILL.sweep,
   // how much wider than the live bands this check's own target is. The whetstone
   // moves the bands themselves and every check reads them, so only the small
@@ -2324,7 +2325,12 @@ export const sickle = {
    toss rather than a read, so the nick's target is as wide as its sweep is short
    and paintMeter draws the wider bands rather than the bare ones under them */
 export const SSICKLE = {
-  draw: 0.2, // seconds a nick may keep drawing for: the line, and the gauge's sweep
+  draw: 0.2, // seconds a nick may keep drawing for: the line's own fifth
+  // seconds the gauge's needle takes to cross the track, kept apart from the
+  // fifth above: a little slower than it, so the drag files the line and the
+  // hold reads the needle. The line stops at its fifth while the needle is
+  // still walking, and a needle that does reach the far end is still a miss
+  sweep: 0.3,
   band: 7, // canvas px either side of the line the small blade reaches
   stub: 0.6, // stubble the nick leaves: a hand-high cut rather than a scythe's
   vary: 0.5, // how much that stubble wanders along one nick
@@ -2581,8 +2587,9 @@ export function endStroke() {
 
    A nick is a swipe at a smaller scale rather than a swipe with a smaller blade
    in it: the line is a fifth of a second rather than a whole second, and the
-   gauge's sweep is that same fifth, so the press, the drag and the lift are one
-   beat rather than three. What that beat decides is whether the line cut at all
+   gauge's needle walks its own sweep, a little slower than that fifth, so the
+   press, the drag and the lift are still one beat rather than three. What that
+   beat decides is whether the line cut at all
    - the walk files the standing stalks the line crossed and cutSmall takes them
    when the verdict has landed, so a pass cuts the swathe the hand drew and a
    miss leaves every one of them standing.
@@ -2624,11 +2631,12 @@ export function beginSmall( x, y, type ) {
 }
 
 /* the same arming the stalk's and the animal's checks arm on, bound to the nick:
-   one meter, one grading and one ring, but the sweep is the nick's own fifth of a
-   second and the target is SSICKLE.widen wider inside it. The lead is scaled by
-   the same factor, so a press that never dragged is still a guaranteed miss and a
-   needle that ran the whole track out is still one too - the widened target sits
-   inside the track rather than reaching for its ends */
+   one meter, one grading and one ring, but the needle walks the nick's own sweep
+   rather than the fifth above - a little slower than the line, so the drag files
+   what it crossed and the hold reads the needle. The lead is scaled by the same
+   factor, so a press that never dragged is still a guaranteed miss and so is a
+   needle that ran the whole track out: the widened target sits inside the track
+   rather than reaching for its ends */
 function armSmall( x, y ) {
   if ( health.hp <= 0 ) return; // a spent hand: no meter, no check spent
   skill.active = true;
@@ -2638,7 +2646,7 @@ function armSmall( x, y ) {
   // pick stays out of it and the check's own path can never reach one plant
   skill.tier = -1;
   skill.index = -1;
-  skill.sweep = SSICKLE.draw;
+  skill.sweep = SSICKLE.sweep;
   skill.widen = SSICKLE.widen;
   skill.x = x;
   skill.y = y;
@@ -2656,9 +2664,9 @@ export function reapSmallStroke( x, y ) {
   if ( small.spent ) return;
   const now = performance.now();
   if ( now - small.startedAt > SSICKLE.draw * 1000 ) {
-    // the fifth of a second is up: the rest of the drag draws nothing, so a hand
-    // that keeps going after the gauge has run its track out cannot file a stalk
-    // the line never crossed
+    // the line's own fifth is up: the rest of the drag draws nothing, so a hand
+    // that keeps going cannot file a stalk the line never crossed - the needle is
+    // still walking by then, and where it reads is the lift's to say
     small.spent = true;
     return;
   }
@@ -2672,9 +2680,10 @@ export function reapSmallStroke( x, y ) {
 }
 
 /* the nick's lift: the gauge reads the needle where the hand stopped rather than
-   where the track ended, so the drag is the read - a short drag parks the needle
-   near the start and a long one lets it run out. The stroke closes either way, so
-   a nick that ran past its own fifth still shows the line the hand made. No animal
+   where the track ended, so the hold is the read - a short hold parks the needle
+   near the start and a long one lets it run out. The line stopped at its own fifth
+   before either of them, so a nick held past the fifth still shows the line the
+   hand made. No animal
    is answered to here: frightenBeasts belongs to the swathe's lift, and the small
    blade is the stand's tool - a nick never drives a beast off, never pays a hide
    a hit and never spends one */
