@@ -48,16 +48,22 @@
 //                 and the claim itself lifts off the cut and dies a capped
 //                 height above it - the whole answer dressed by the run, so a
 //                 deep one reads grander than the nick that opened it
-//   beasts        the field's own wildlife: a bear, a boar and a snake are let
-//                 loose through the stand at random and walk toward the player,
-//                 and a beast that reaches arm's length winds up and strikes -
-//                 the strike takes its damage through hurt(), so the bar on the
-//                 glass, the ration and the collapse are the same ledger a bite
-//                 answers to. Each animal is primitives merged into one geometry
-//                 per species, so a beast is one draw call, a swipe ending
-//                 with one inside the ring drives it off rather than killing it,
-//                 and a check aimed at one plays the cut's own meter on the
-//                 animal's shorter sweep to do the same to that one animal
+//   beasts        the field's own wildlife: the day opens with one animal already
+//                 walking the stand and the field asks for the next one on a random
+//                 30-60 s draw rather than on a fast beat, so a bear, a boar and a
+//                 snake are let loose through the stand at random and walk toward the
+//                 player, and a beast that reaches arm's length winds up and strikes -
+//                 the strike takes its damage through hurt(), so the bar on the glass,
+//                 the ration and the collapse are the same ledger a bite answers to.
+//                 Each animal is primitives merged into one geometry per species, so a
+//                 beast is one draw call, a swipe ending with one inside the ring spends
+//                 that animal's own hide rather than only driving it off, and a check
+//                 aimed at one plays the cut's own meter - dressed orange rather than
+//                 the crop's green, which is what says the gauge belongs to a hide - on
+//                 the animal's shorter sweep to do the same to that one animal. A check
+//                 that goes wrong about an animal costs the hand nothing: the answer
+//                 belongs to the animal rather than to the arm, so a failed one leaves
+//                 the hide and the day both alone
 //
 // Nothing is loaded: every geometry and material here is procedural, so the
 // page's only dependency is three.js itself, which index.html's import map
@@ -1551,9 +1557,12 @@ export function resolveSkill() {
       playSound( grade === "great" ? SOUND.great : SOUND.normal, prey ? prey.spec.id : grade );
     } else {
       playSound( SOUND.hurt, grade );
-      // the swing was made and the animal was not driven off, so the arm paid
-      // for it exactly as it does for a missed cut
-      hurt( HP.fail );
+      // the swing went wrong, but the answer belongs to the animal rather than to
+      // the arm: nothing is spent off the hand's own day. A missed cut costs the
+      // arm because the arm is what a cut answers to; a check about an animal
+      // answers to that animal's hide, and a failed one leaves the hide it never
+      // touched and the day it never spent both alone - the risk the shorter
+      // sweep carries is a lost hit rather than a bite the player owes
     }
     skill.beast = null;
     return;
@@ -1754,6 +1763,13 @@ export function stepSkill( now ) {
 function paintMeter( now ) {
   const el = meterNode || ( meterNode = document.getElementById( "skill" ) );
   if ( !el ) return;
+  // one gauge and one grading for both answers the hand makes, but the glass says
+  // which answer it belongs to before any grade has landed: a check aimed at an
+  // animal wears orange rather than the crop's green, which is what tells the
+  // player the hide rather than the arm is what this check spends - and that a
+  // failed one spends neither. The class is written rather than a style so the
+  // ladder lives in the stylesheet with the rest of the glass's look
+  el.classList.toggle( "beast", skill.target === "beast" );
   if ( !meterVerdict ) meterVerdict = document.getElementById( "skill-verdict" );
   const showing = skill.active || ( skill.verdictAt >= 0 && now - skill.verdictAt < SKILL.verdict * 1000 );
   if ( !showing ) {
@@ -2769,8 +2785,13 @@ export const BEASTS = [
 
 // the field's own clock for letting them loose
 export const BEAST_RULE = {
-  first: 1.4, // seconds before the stand gets its first beast
-  every: [ 3.5, 8.5 ], // seconds between the next one and the one after
+  // the day opens with one animal already walking the stand rather than one to
+  // come a second later, and the field asks for the next one on a random 30-60
+  // s draw rather than on a 3.5-8.5 s beat: the stand's population is what the
+  // url names, so the animals it is allowed to hold arrive one at a time across
+  // the day rather than as a herd the player has to clear before the rice is cut
+  first: 0, // seconds before the stand gets its first beast: the day starts with it
+  every: [ 30, 60 ], // seconds between the next one and the one after, drawn at random
   strike: 0.3, // seconds the dash a bite rides on lasts
   leave: 58, // metres from the player past which a beast is let go
   minX: -124,

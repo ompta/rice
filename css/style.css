@@ -602,6 +602,35 @@ html.touch .stats {
   background: #eef6dc;
 }
 
+/* the same gauge about an animal rather than a stalk: one meter, one grading and
+   one ring, but the glass wears orange rather than the crop's green while the
+   check is bound to a hide. The colour is the whole tell - it lands before any
+   grade does, so a player sees the check they are playing is the animal's own
+   answer rather than the arm's, and knows a failed one costs the hand nothing
+   rather than the cut's share of the day. app.js writes the class rather than a
+   style, which is why the ladder lives here with the rest of the glass's look */
+.skill.beast {
+  background: rgba(34, 20, 12, 0.72);
+  border: 1px solid rgba(226, 138, 62, 0.55);
+}
+
+.skill.beast .band {
+  background: rgba(226, 138, 62, 0.26);
+}
+
+.skill.beast .band.good {
+  background: rgba(226, 138, 62, 0.58);
+}
+
+.skill.beast .band.great {
+  background: #ffe3c0;
+}
+
+.skill.beast .needle {
+  background: #ffb35e;
+  box-shadow: 0 0 3px rgba(0, 0, 0, 0.65);
+}
+
 /* ---------------------------------------------------------- the sickle -- */
 /* The line the sickle has drawn is one polyline over the whole glass rather
    than geometry in front of the field: the stroke belongs to the glass, so it
