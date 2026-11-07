@@ -133,6 +133,9 @@ export const params = (() => {
     // 1 = start with the sickle already drawn, so a harness can drive a swipe
     // without first clicking the panel
     sickle: num( "sickle", 0 ) > 0,
+    // 1 = start with the small blade already drawn, so a harness can drive a
+    // nick without buying it first or clicking the bar
+    ssickle: num( "ssickle", 0 ) > 0,
     // 1 = open the shop card at start, so a harness can price a purchase without
     // first clicking the bar
     shop: num( "shop", 0 ) > 0,
@@ -160,6 +163,7 @@ state.paused = params.paused;
 state.quality = params.quality;
 state.walk = params.walk;
 state.sickle = params.sickle;
+state.ssickle = params.ssickle;
 
 // A phone or tablet has no keys, so it gets its own control set: a thumb pad for
 // walking, hold-to-press elevation buttons, and a tap (never a drag) to arm the
@@ -427,6 +431,9 @@ export function build() {
   // own lights, so it is a real object in the field rather than a HUD decal.
   // See reapSickle / stepSickle below.
   buildSickle();
+  // the small blade is the same geometry held nearer and lower, so the shop's
+  // nick costs one more hidden mesh rather than a second model
+  buildSmall();
 
   return { renderer, scene, camera };
 }
@@ -994,6 +1001,10 @@ export const EQUIPMENT = [
   { id: "bladeoil", name: "Blade Oil", cost: 8, note: "a swipe spends nothing off the purse" },
   { id: "snath", name: "Long Snath", cost: 10, note: "the ring both tools answer to grows by 1.2 m" },
   { id: "gild", name: "Gilded Sickle", cost: 16, note: "every cut pays one gold more" },
+  // the small blade is the one piece that carries a control rather than a
+  // number: buying it puts its own toggle on the bar, and the nick it draws is
+  // a fifth of a second of line rather than the whole second the big blade gets
+  { id: "ssickle", name: "S SICKLE", cost: 50, note: "a 0.2 s nick: the gauge decides whether the line cut, and no animal is touched" },
   // the ration is the one row that can be bought again: it is eaten rather than
   // carried, so it moves the hand rather than a number the field runs on. Its
   // cost is a meal's, weighed against the 20 a miss already costs the arm
@@ -1045,6 +1056,15 @@ export function equip( id ) {
   }
   if ( id === "gild" ) {
     gear.pay = 1;
+    return true;
+  }
+  if ( id === "ssickle" ) {
+    // the small blade moves no number the field runs on: it hands the hand a
+    // second, shorter tool rather than dressing the one it has. What the
+    // purchase does is put the tool's own toggle on the bar - the mode itself
+    // stays the toggle's to flip, so buying never draws a blade the player did
+    // not ask for
+    revealSmall();
     return true;
   }
   return false;
@@ -1413,13 +1433,22 @@ export const skill = {
   tier: -1,
   index: -1,
   // what the live check is bound to: "" before the first arm, "plant" for a
-  // stalk and "beast" for an animal standing in the stand. The two share one
-  // meter and one grading, so only the sweep and what a pass does differ
+  // stalk, "beast" for an animal standing in the stand and "small" for the
+  // small blade's own nick. The three share one meter and one grading; what
+  // differs is the sweep and what a pass does - a nick answers for the whole
+  // line rather than for one stalk or one animal
   target: "",
   // seconds this check's needle takes to cross the track: the cut's own 1.5 s
   // for a stalk, the animal's shorter sweep for a beast. Kept on the check so
   // the one line that advances the needle never has to know which it is on
   sweep: SKILL.sweep,
+  // how much wider than the live bands this check's own target is. The whetstone
+  // moves the bands themselves and every check reads them, so only the small
+  // blade moves this: its whole sweep is 0.2 s, and a bare target inside a sweep
+  // that short would be a coin toss rather than a read. paintMeter scales the
+  // bands it draws by the same number, so the glass always shows the target the
+  // check is actually scored on
+  widen: 1,
   x: 0, // where the click landed, so the meter stays put while the cursor roams
   y: 0,
   zone: 0, // centre of the target zone, 0..1 along the track
@@ -1444,12 +1473,17 @@ export const skill = {
 Object.defineProperty( skill, "beast", { value: null, writable: true, enumerable: false, configurable: true } );
 
 // the grade is a distance from the zone centre against the nested bands, so
-// one subtraction decides all four variants
-export function gradeAt( pos ) {
+// one subtraction decides all four variants. widen is the small blade's own
+// widening of this check rather than of the live bands: every band is scaled by
+// it so the target the glass draws is the target that is scored, and the bands
+// stay nested because one factor scales all three. A harness that asks about a
+// bare check calls this with no widen and gets the live table untouched
+export function gradeAt( pos, widen ) {
+  const w = widen > 1 ? widen : 1;
   const d = Math.abs( pos - skill.zone );
-  if ( d <= bands.great ) return "great";
-  if ( d <= bands.good ) return "good";
-  if ( d <= bands.normal ) return "normal";
+  if ( d <= bands.great * w ) return "great";
+  if ( d <= bands.good * w ) return "good";
+  if ( d <= bands.normal * w ) return "normal";
   return "fail";
 }
 
@@ -1470,6 +1504,9 @@ function armBeast( b ) {
   skill.target = "beast";
   skill.beast = b;
   skill.sweep = BEAST_RULE.attack.sweep;
+  // the widening belongs to the nick alone: a check about an animal reads the
+  // live bands, so it clears whatever the last check left in the holder
+  skill.widen = 1;
   // the check is bound to the animal rather than to a stalk, so the plant pick
   // stays out of it and a pass can never reach cutPlant
   skill.tier = -1;
@@ -1515,6 +1552,9 @@ export function armSkill() {
   skill.target = "plant";
   skill.beast = null;
   skill.sweep = SKILL.sweep;
+  // the widening belongs to the nick alone: a check about a stalk reads the live
+  // bands, so it clears whatever the last check left in the holder
+  skill.widen = 1;
   skill.tier = hover.tier;
   skill.index = hover.index;
   skill.x = hover.x;
@@ -1528,7 +1568,10 @@ export function armSkill() {
 }
 
 export function resolveSkill() {
-  const grade = gradeAt( skill.needle );
+  // the widening is the check's own rather than the table's: a stalk or an animal
+  // leaves the holder at 1 and reads the live bands, and the nick leaves it at its
+  // own factor so the target the glass drew is the target that is scored
+  const grade = gradeAt( skill.needle, skill.widen );
   skill.at = skill.needle;
   skill.last = grade;
   // an animal rather than a stalk: the grade is the same rule and the meter is
@@ -1565,6 +1608,37 @@ export function resolveSkill() {
       // sweep carries is a lost hit rather than a bite the player owes
     }
     skill.beast = null;
+    return;
+  }
+  /* the nick rather than a stalk or a hide: the line the hand drew is the answer
+     the check is about, so a pass cuts every standing plant that line touched and
+     a miss cuts none of them - the stalks were only filed by the walk, never
+     taken. The gauge's verdict still lands, the purse still pays the grade and
+     the run still counts, since the nick is a cut the arm answers to rather than
+     a check about a hide. No animal is touched on this path at all: the nick's
+     reach is its own band and reapSmall never asks a hide for its answer, which
+     is what the small blade is for - the stand, never the wildlife */
+  if ( skill.target === "small" ) {
+    small.taken = grade === "fail" ? 0 : cutSmall();
+    small.takenAt = performance.now();
+    harvest[ grade ] = harvest[ grade ] + 1;
+    skill.gold = earnGold( grade );
+    // the claim lifts off the far end of the line rather than off one plant, so
+    // the burst reads as the nick's own finish; the readout names the plants the
+    // line took rather than a grade, which is what a swathe's answer always said
+    const n = small.stroke.length;
+    spawnFlair( n >= 2 ? small.stroke[ n - 2 ] : skill.x, n >= 2 ? small.stroke[ n - 1 ] : skill.y, flairTier( grade, combo.streak ), grade === "fail" ? -1 : small.taken );
+    skill.verdictAt = performance.now();
+    skill.active = false;
+    if ( grade !== "fail" ) {
+      // one cue for the whole nick rather than one per stalk, as a swathe's is
+      playSound( grade === "great" ? SOUND.great : SOUND.normal, grade );
+    } else {
+      playSound( SOUND.hurt, grade );
+      // the nick was made and nothing was cut, so the arm paid for it exactly as
+      // a missed cut does: the small blade is the arm's tool, not a hide's
+      hurt( HP.fail );
+    }
     return;
   }
   // the money the pass paid in, kept on the check so the verdict can name it.
@@ -1788,7 +1862,9 @@ function paintMeter( now ) {
   for ( const key of [ "normal", "good", "great" ] ) {
     const band = document.getElementById( "skill-" + key );
     if ( !band ) continue;
-    const half = bands[ key ];
+    // the same widening the grade is scored on, so the target on the glass is
+    // the target the check answers to rather than the bare one under it
+    const half = bands[ key ] * ( skill.widen > 1 ? skill.widen : 1 );
     band.style.left = pct( skill.zone - half );
     band.style.width = pct( half * 2 );
   }
@@ -2237,9 +2313,57 @@ export const sickle = {
   // stroke is a swipe rather than a stroke
 };
 
-// the item's own pose state: the swing eased from the swipe, and the nodes the
-// drawn line is painted into
+/* the small blade's own reach: a nick rather than a swathe. The band is a hand's
+   width either side of the line rather than the blade's, and the cap is the
+   plants one 0.2 s line can cross at the default burst size rather than the
+   whole fragment pool's swathe - the nick's own line is what bounds it, so it
+   cannot mow what a flick cannot mow. draw is the whole point of the piece: the
+   line is a fifth of a second, and the gauge's sweep is that same fifth, so the
+   press, the drag and the lift are one beat rather than three. widen is the
+   target's own share of that beat: a bare target inside 0.2 s would be a coin
+   toss rather than a read, so the nick's target is as wide as its sweep is short
+   and paintMeter draws the wider bands rather than the bare ones under them */
+export const SSICKLE = {
+  draw: 0.2, // seconds a nick may keep drawing for: the line, and the gauge's sweep
+  band: 7, // canvas px either side of the line the small blade reaches
+  stub: 0.6, // stubble the nick leaves: a hand-high cut rather than a scythe's
+  vary: 0.5, // how much that stubble wanders along one nick
+  max: 18, // plants one nick may take at most
+  widen: 1.5, // how much wider than the live bands the nick's own target is
+  // where the item sits in the frame: the same seat as the swathe, a hand's
+  // width nearer the body and held lower, so the two blades never read as one
+  scale: 0.55, // the swathe's own geometry, shrunk: a small blade, not a new one
+  hx: 0.18,
+  hy: -0.34,
+  hz: -0.5,
+};
+
+// what the last nick did, so a harness can read the line itself rather than
+// infer it from pixels: the points the hand drew, the standing plants that line
+// touched, and the band it used. The plants are filed rather than taken -
+// whether the line cut at all is the gauge's to decide, and cutSmall takes what
+// was filed when the verdict has landed
+export const small = {
+  stroke: [], // canvas-space points, in the order the hand drew them, flat x,y
+  pointerType: "", // "mouse" | "touch" | "pen": what the last nick was drawn with
+  band: 0, // px the last nick actually used
+  cut: [], // { tier, index } the last nick's line touched, still to be taken
+  swings: 0, // nicks begun this session
+  plants: 0, // plants the small blade has taken off this session
+  taken: 0, // plants the last nick took: what the readout names rather than a grade
+  takenAt: 0, // when the last nick's verdict landed, so the readout stays fresh
+  spent: false, // the fifth of a second is used up: the rest of the drag draws nothing
+  startedAt: 0, // when the last nick began, on the wall clock
+  lastAt: 0, // when the last point was actually drawn
+};
+
+// the swathe's own pose state: the swing eased from the swipe, and the nodes the
+// item is carried on
 export const sickleRig = { group: null, mesh: null, swing: 0 };
+
+// the small blade's own pose state: the swing eased from the nick rather than
+// from the swipe, and the nodes the item is carried on
+export const smallRig = { group: null, mesh: null, swing: 0 };
 
 // A grip and a crescent blade, authored as flat ribbons in the sickle's own
 // plane (x across, y up, the flat facing the viewer). The blade is an arc swept
@@ -2344,6 +2468,37 @@ function buildSickle() {
   sickleRig.mesh = mesh;
 }
 
+// The nick's own item: the swathe's geometry, scaled down and held a hand's
+// width nearer the body, so the small blade reads as a smaller version of the
+// same tool rather than as a second model. Built once and hidden like the blade
+// is, so a field that has never bought the nick keeps the draw calls it always
+// had - the mesh is only ever made visible while the nick's own mode is on
+function buildSmall() {
+  const geo = sickleGeometry();
+  const mat = new THREE.MeshLambertMaterial( {
+    color: "#ffffff",
+    vertexColors: true,
+    side: THREE.DoubleSide,
+    // the item is arm's length from the eye, so the field's haze has nothing
+    // to say about it - the fog would only wash the steel
+    fog: false,
+  } );
+  const mesh = new THREE.Mesh( geo, mat );
+  mesh.visible = false;
+  // the scale is the item's own rather than the swing's: the arm turns through
+  // the same angles the swathe's does and only the blade comes up shorter
+  mesh.scale.setScalar( SSICKLE.scale );
+  mesh.position.set( SSICKLE.hx, SSICKLE.hy, SSICKLE.hz );
+  const group = new THREE.Group();
+  // the camera's own rotation order, so copying its three angles over each
+  // frame lands the item exactly where the frame says it should be
+  group.rotation.order = "YXZ";
+  group.add( mesh );
+  scene.add( group );
+  smallRig.group = group;
+  smallRig.mesh = mesh;
+}
+
 // The blade drawn from the last point on the stroke to this one: every standing
 // plant whose stem projects within the band of that segment is cut at the
 // stubble. The stroke is capped at SICKLE.draw seconds, so a hand that keeps
@@ -2421,6 +2576,133 @@ export function endStroke() {
   sickle.spent = false;
 }
 
+/* ---------------------------------------------------------------------------
+   The nick: the small blade's own three halves of the same gesture.
+
+   A nick is a swipe at a smaller scale rather than a swipe with a smaller blade
+   in it: the line is a fifth of a second rather than a whole second, and the
+   gauge's sweep is that same fifth, so the press, the drag and the lift are one
+   beat rather than three. What that beat decides is whether the line cut at all
+   - the walk files the standing stalks the line crossed and cutSmall takes them
+   when the verdict has landed, so a pass cuts the swathe the hand drew and a
+   miss leaves every one of them standing.
+
+   What it does not do is answer to an animal. frightenBeasts belongs to the
+   swathe's lift and no nick path reaches strikeBeast or damageBeast: the small
+   blade is the stand's tool, so a nick never drives a beast off, never pays a
+   hide a hit and never spends one.
+   --------------------------------------------------------------------------- */
+
+/* the nick's own press: the small blade spends the tool's gold like a swipe (the
+   press is the use of the tool, whatever the line later finds) and arms the check
+   whose sweep is the nick's whole fifth of a second. Nothing under the cursor is
+   needed - the line the hand draws is what the check is about - so a nick over
+   open water still costs the purse, still asks the gauge and still files nothing
+   to cut */
+export function beginSmall( x, y, type ) {
+  small.stroke.length = 0;
+  small.cut.length = 0;
+  // a spent hand cannot nick: the press draws no line, spends no fee and arms no
+  // check, so a down field costs the purse nothing. The draw is marked spent so
+  // the drag that follows reaps nothing rather than continuing a line that never
+  // started
+  if ( health.hp <= 0 ) {
+    small.spent = true;
+    return;
+  }
+  small.stroke.push( x, y );
+  small.pointerType = type;
+  small.startedAt = performance.now();
+  small.lastAt = small.startedAt;
+  small.spent = false;
+  // a fingertip is sloppier than a cursor, and hover.radius already encodes how
+  // much sloppier: widening the band by the same amount keeps the nick honest
+  small.band = SSICKLE.band + Math.max( 0, hover.radius - 13 );
+  payGold( gear.fee );
+  small.swings = small.swings + 1;
+  armSmall( x, y );
+}
+
+/* the same arming the stalk's and the animal's checks arm on, bound to the nick:
+   one meter, one grading and one ring, but the sweep is the nick's own fifth of a
+   second and the target is SSICKLE.widen wider inside it. The lead is scaled by
+   the same factor, so a press that never dragged is still a guaranteed miss and a
+   needle that ran the whole track out is still one too - the widened target sits
+   inside the track rather than reaching for its ends */
+function armSmall( x, y ) {
+  if ( health.hp <= 0 ) return; // a spent hand: no meter, no check spent
+  skill.active = true;
+  skill.target = "small";
+  skill.beast = null;
+  // no stalk is bound: the line the hand drew is what a pass cuts, so the plant
+  // pick stays out of it and the check's own path can never reach one plant
+  skill.tier = -1;
+  skill.index = -1;
+  skill.sweep = SSICKLE.draw;
+  skill.widen = SSICKLE.widen;
+  skill.x = x;
+  skill.y = y;
+  const w = SSICKLE.widen > 1 ? SSICKLE.widen : 1;
+  // the zone centre stays a whole widened normal band plus the lead in from both
+  // ends, which is what makes an instant press a guaranteed miss
+  let span = 1 - 2 * ( bands.normal * w + SKILL.lead );
+  if ( span < 0 ) span = 0; // a target so wide the lead has no room left: the zone sits dead centre
+  skill.zone = bands.normal * w + SKILL.lead + Math.random() * span;
+  skill.needle = 0;
+  skill.startedAt = performance.now();
+}
+
+export function reapSmallStroke( x, y ) {
+  if ( small.spent ) return;
+  const now = performance.now();
+  if ( now - small.startedAt > SSICKLE.draw * 1000 ) {
+    // the fifth of a second is up: the rest of the drag draws nothing, so a hand
+    // that keeps going after the gauge has run its track out cannot file a stalk
+    // the line never crossed
+    small.spent = true;
+    return;
+  }
+  const n = small.stroke.length;
+  if ( n < 2 ) return;
+  reapSmall( small.stroke[ n - 2 ], small.stroke[ n - 1 ], x, y );
+  small.stroke.push( x, y );
+  // the point landed on the glass at this instant, so a harness can tell a nick
+  // that ran out of its fifth from one that never stopped drawing
+  small.lastAt = now;
+}
+
+/* the nick's lift: the gauge reads the needle where the hand stopped rather than
+   where the track ended, so the drag is the read - a short drag parks the needle
+   near the start and a long one lets it run out. The stroke closes either way, so
+   a nick that ran past its own fifth still shows the line the hand made. No animal
+   is answered to here: frightenBeasts belongs to the swathe's lift, and the small
+   blade is the stand's tool - a nick never drives a beast off, never pays a hide
+   a hit and never spends one */
+export function endSmall() {
+  if ( skill.active ) resolveSkill();
+  small.stroke.length = 0;
+  small.cut.length = 0;
+}
+
+/* what a pass takes off the stand: every stalk the nick's line filed, at the nick's
+   own stubble - a hand-high cut rather than a scythe's, which is what a small blade
+   leaves behind. A miss never calls this, so the filed stalks are still standing
+   when the verdict has landed and the readout counts nothing. The stand is re-read
+   here rather than at the line, so a stalk something else already took is not taken
+   a second time and a nick cannot pay the stubble twice */
+function cutSmall() {
+  let took = 0;
+  for ( let k = 0; k < small.cut.length; k++ ) {
+    const p = small.cut[ k ];
+    if ( field.tiers[ p.tier ].userData.cut[ p.index ] ) continue;
+    cutPlant( p.tier, p.index, SSICKLE.stub + Math.random() * SSICKLE.vary );
+    small.plants = small.plants + 1;
+    harvest.cut = harvest.cut + 1;
+    took = took + 1;
+  }
+  return took;
+}
+
 const reapMatrix = new THREE.Matrix4();
 
 function reapSickle( x0, y0, x1, y1 ) {
@@ -2428,7 +2710,19 @@ function reapSickle( x0, y0, x1, y1 ) {
   if ( !el ) return;
   const r = el.getBoundingClientRect();
   if ( r.width <= 0 || r.height <= 0 ) return;
-  reapSickleOn( x0, y0, x1, y1, r.width, r.height );
+  reapSickleOn( x0, y0, x1, y1, r.width, r.height, sickle, SICKLE.max, false );
+}
+
+// the nick's own walk: the same band test down the same spine, but filed into
+// the nick's record at the nick's own cap rather than taken off the stand. The
+// ring is the same ring - the hand still only reaches what the hand reaches - so
+// a nick drawn across the whole glass cuts only what is standing near the player
+function reapSmall( x0, y0, x1, y1 ) {
+  const el = document.getElementById( "scene-canvas" );
+  if ( !el ) return;
+  const r = el.getBoundingClientRect();
+  if ( r.width <= 0 || r.height <= 0 ) return;
+  reapSickleOn( x0, y0, x1, y1, r.width, r.height, small, SSICKLE.max, true );
 }
 
 // squared distance from a point to a segment: the band is a screen distance, so
@@ -2527,8 +2821,16 @@ function rootDrift( e, r1, r3, rw, ndcx, reach, w ) {
   return 0.5 * w * reach * ( r1 + r3 * Math.abs( ndcx ) ) / near;
 }
 
-function reapSickleOn( x0, y0, x1, y1, w, h ) {
-  const band = sickle.band;
+/* the walk both blades take. rec is the record the walk answers to and cap that
+   record's own reach's limit, so the swathe walks sickle / SICKLE.max and the
+   nick walks small / SSICKLE.max rather than the walk knowing about either. defer
+   says the nick: its line only says where the hand went, and whether it cut at
+   all is the gauge's to decide, so the walk files the standing stalks it touched
+   and cutSmall takes them once the verdict has landed. A filed stalk is filed
+   once - the same plant can cross several segments of one line, and a nick that
+   took it twice would pay the stubble twice as well */
+function reapSickleOn( x0, y0, x1, y1, w, h, rec, cap, defer ) {
+  const band = rec.band;
   reapMatrix.copy( camera.projectionMatrix ).multiply( camera.matrixWorldInverse );
   const e = reapMatrix.elements;
   const band2 = band * band;
@@ -2556,7 +2858,7 @@ function reapSickleOn( x0, y0, x1, y1, w, h ) {
     const wind = mesh.geometry.attributes.aWind.array;
     const sway = mesh.geometry.attributes.aWindZ.array;
     for ( let i = 0; i < mesh.count; i++ ) {
-      if ( sickle.cut.length >= SICKLE.max ) return; // one flick cannot mow the field
+      if ( rec.cut.length >= cap ) return; // one flick cannot mow the field
       if ( cut[ i ] ) continue; // already stubble: nothing to take
       const o = i * 16;
       const x = m[ o + 12 ];
@@ -2599,12 +2901,27 @@ function reapSickleOn( x0, y0, x1, y1, w, h ) {
         }
       }
       if ( !hit ) continue;
+      // the nick's line only says where the hand went: the stalk is filed rather
+      // than taken, so a pass takes it and a miss leaves it standing. Filing is
+      // deduplicated because the walk runs once per drawn segment and one plant
+      // can cross more than one of them
+      if ( defer ) {
+        let filed = false;
+        for ( let k = 0; k < rec.cut.length; k++ ) {
+          if ( rec.cut[ k ].tier === t && rec.cut[ k ].index === i ) {
+            filed = true;
+            break;
+          }
+        }
+        if ( !filed ) rec.cut.push( { tier: t, index: i } );
+        continue;
+      }
       // the stubble wanders a little along the swathe, so the cut reads as a
       // scythe's arc rather than as one perfectly level line
       const share = SICKLE.stub + Math.random() * SICKLE.vary;
       cutPlant( t, i, share );
-      sickle.cut.push( { tier: t, index: i, share: share } );
-      sickle.plants = sickle.plants + 1;
+      rec.cut.push( { tier: t, index: i, share: share } );
+      rec.plants = rec.plants + 1;
       harvest.cut = harvest.cut + 1;
     }
   }
@@ -2622,7 +2939,14 @@ let strokeLine = null;
 function paintStroke() {
   const el = strokeNode || ( strokeNode = document.getElementById( "stroke" ) );
   if ( !el ) return;
-  const pts = sickle.stroke;
+  /* whichever blade is on the glass draws its own line: the nick keeps its own
+     points, so a field that has just finished a nick still shows the line the hand
+     made rather than the swathe's, and a field that has never bought the nick
+     never has a nick's points to show. The nick wins when both are on the glass
+     because the two modes cannot be on together - setSmall and setSickle clear
+     each other - so this only has to settle a stroke that has just closed */
+  const nick = state.ssickle && small.stroke.length >= 4;
+  const pts = nick ? small.stroke : sickle.stroke;
   if ( pts.length < 4 ) {
     el.style.display = "none";
     return;
@@ -2635,7 +2959,14 @@ function paintStroke() {
     if ( i ) s += " ";
     s += pts[ i ].toFixed( 1 ) + "," + pts[ i + 1 ].toFixed( 1 );
   }
-  if ( strokeBand ) strokeBand.setAttribute( "points", s );
+  // the band's width is the reach the walk used, so the glass shows the nick's
+  // hand's width rather than the blade's. The stylesheet's 25 px is the swathe's
+  // own (SICKLE.band * 2 + 1), so clearing the style hands that back rather than
+  // restating it here
+  if ( strokeBand ) {
+    strokeBand.setAttribute( "points", s );
+    strokeBand.style.strokeWidth = nick ? ( small.band * 2 + 1 ) + "px" : "";
+  }
   if ( strokeLine ) strokeLine.setAttribute( "points", s );
 }
 
@@ -2670,6 +3001,48 @@ export function stepSickle( now ) {
     SICKLE.hx - 0.1 * ease,
     SICKLE.hy + 0.05 - 0.07 * ease,
     SICKLE.hz + 0.05 * ease
+  );
+}
+
+/* the same carry the swathe's arm does, eased from the nick's own fifth of a
+   second rather than from the swipe's whole one: the same turn through the same
+   angles, so the small blade reads as the same arm holding a shorter tool rather
+   than as a second animation. The nick's swing is the gauge's own needle, which
+   is what keeps the drawn line and the item in step - the hand that ran the track
+   out is the hand that swung the blade out */
+function stepSmallRig() {
+  const rig = smallRig;
+  if ( !rig.group ) return;
+  if ( state.ssickle && skill.active && skill.target === "small" ) {
+    const el = ( performance.now() - skill.startedAt ) / ( skill.sweep * 1000 );
+    rig.swing = Math.min( 1, Math.max( 0, el ) );
+  } else if ( rig.swing > 0 ) {
+    // the sheathe: the nick's lift has already resolved the check, so the blade
+    // comes back on the same easing the swathe's does rather than snapping
+    rig.swing = Math.max( 0, rig.swing - 0.09 );
+  }
+  // the item is hidden outright while sheathed, so the field keeps the draw
+  // calls it always had and a toggle costs no allocation
+  rig.mesh.visible = state.ssickle;
+  if ( !state.ssickle ) return;
+  rig.group.position.copy( camera.position );
+  rig.group.rotation.x = camera.rotation.x;
+  rig.group.rotation.y = camera.rotation.y;
+  rig.group.rotation.z = camera.rotation.z;
+  const s = rig.swing;
+  const ease = s * s * ( 3 - 2 * s );
+  // the swing: the wrist starts open and the blade sweeps across the body, so
+  // the drawn line and the item turn together rather than one of them sliding
+  rig.mesh.rotation.x = -0.34 - 1.5 * ease;
+  rig.mesh.rotation.y = 0.22 - 0.72 * ease;
+  rig.mesh.rotation.z = 0.12 + 0.52 * ease;
+  // the reach: the arm straightens as the blade comes through. The seat is the
+  // swathe's own, pulled a hand's width nearer the body and held lower, so the
+  // two blades never read as one item at two sizes
+  rig.mesh.position.set(
+    SSICKLE.hx - 0.06 * ease,
+    SSICKLE.hy + 0.03 - 0.05 * ease,
+    SSICKLE.hz + 0.03 * ease
   );
 }
 
@@ -4040,13 +4413,51 @@ export function setPaused( p ) {
 // still read "sheathed" while the blade is out
 let sickleButton = null;
 
+/* the nick's own toggle is remembered the same way, because the panel must not
+   still read the nick out while the swathe is drawn - the two blades cannot be
+   out together, so whichever was drawn last is the one the pointer holds */
+let smallButton = null;
+
 export function setSickle( v ) {
   state.sickle = v === true || v === 1 || v === "on" || v === "true" || v === "1";
+  // the two blades cannot be out on the same glass: drawing one sheathes the
+  // other, so a field cannot read a nick and a swathe at once and the pointer
+  // never has to ask which of the two it is holding
+  if ( state.sickle && state.ssickle ) setSmall( false );
   if ( sickleButton ) sickleButton.classList.toggle( "on", state.sickle );
+  if ( smallButton ) smallButton.classList.toggle( "on", state.ssickle );
   if ( state.sickle ) return;
   sickle.stroke.length = 0;
   sickle.cut.length = 0;
   sickle.spent = false;
+}
+
+/* the nick's own flip: the same gesture the swathe's takes, at the smaller tool.
+   Drawing the nick sheathes the swathe, and sheathing the nick drops a nick that
+   was mid-way through - the line the hand was drawing is not carried over into
+   the swathe's stroke, since the two records are separate */
+export function setSmall( v ) {
+  state.ssickle = v === true || v === 1 || v === "on" || v === "true" || v === "1";
+  if ( state.ssickle && state.sickle ) setSickle( false );
+  if ( smallButton ) smallButton.classList.toggle( "on", state.ssickle );
+  if ( sickleButton ) sickleButton.classList.toggle( "on", state.sickle );
+  if ( state.ssickle ) return;
+  small.stroke.length = 0;
+  small.cut.length = 0;
+  small.spent = false;
+}
+
+/* the nick's own toggle is not on the glass until the shop has sold it: the row
+   keeps its height and its width because the button is hidden rather than absent,
+   so buying the item is what reveals the control rather than what rebuilds the
+   bar. The label and the button are revealed together so the row never reads as
+   a bare button, and the stylesheet's [hidden] rule is what keeps the layout
+   unchanged until then */
+export function revealSmall() {
+  for ( const id of [ "smalllabel", "smallbtn" ] ) {
+    const node = document.getElementById( id );
+    if ( node ) node.removeAttribute( "hidden" );
+  }
 }
 
 export function wireUI() {
@@ -4063,6 +4474,16 @@ export function wireUI() {
         setSickle( !state.sickle );
         return;
       }
+      if ( action === "ssickle" ) {
+        // the nick's own flip: the same gesture the swathe's toggle takes, and
+        // drawing the nick sheathes the swathe rather than adding a second blade
+        // to the glass, so the two controls can never both read out. The control
+        // is hidden until the shop has sold it, so a field that has never bought
+        // the nick cannot flip it - the row keeps its place, it just has nothing
+        // to press
+        setSmall( !state.ssickle );
+        return;
+      }
       if ( action === "shop" ) setShop( !shop.open );
     } );
     if ( action === "sickle" ) {
@@ -4070,6 +4491,13 @@ export function wireUI() {
       // ?sickle=1 starts with the blade already drawn, so the panel has to
       // agree with the mode before a single click has happened
       sickleButton.classList.toggle( "on", state.sickle );
+    }
+    if ( action === "ssickle" ) {
+      smallButton = node;
+      // ?ssickle=1 starts with the nick already drawn, so the panel has to agree
+      // with the mode before a single click has happened - the button is still
+      // hidden until the shop has sold it, so this only matters to a harness
+      smallButton.classList.toggle( "on", state.ssickle );
     }
     if ( action === "shop" ) {
       shopButton = node;
@@ -4416,6 +4844,15 @@ export function wireUI() {
       // the animal's own pick runs after the plant's, so a click answers to
       // whichever of the two the cursor is nearer rather than to the stand alone
       pickBeast( e.clientX - r.left, e.clientY - r.top, r.width, r.height );
+      // the nick drawn: the press belongs to the small blade rather than to the
+      // check or the view: it puts the tip on the glass, spends the tool's fee and
+      // arms the gauge whose sweep is the nick's whole fifth of a second. The two
+      // blades cannot be out together - setSmall and setSickle clear each other -
+      // so this branch never has to ask which of the two the pointer holds
+      if ( state.ssickle ) {
+        beginSmall( e.clientX - r.left, e.clientY - r.top, e.pointerType );
+        return;
+      }
       // With the sickle drawn the press belongs to the blade, not to the check:
       // it puts the tip on the glass and starts a swipe, and the drag that
       // follows draws the line rather than turning the view. A cursor and a
@@ -4458,6 +4895,13 @@ export function wireUI() {
       const dy = e.clientY - cam.drag.y;
       cam.drag.x = e.clientX;
       cam.drag.y = e.clientY;
+      // the nick drawn: the drag draws its own fifth-of-a-second line and files
+      // what it crossed rather than reaping it, and the view stays put - the nick
+      // is a smaller version of the same gesture, so it holds the view the same way
+      if ( state.ssickle ) {
+        if ( r.width > 0 && r.height > 0 ) reapSmallStroke( e.clientX - r.left, e.clientY - r.top );
+        return;
+      }
       // the sickle drawn: the drag draws a line and reaps what is under it, and
       // the view stays put - which is the whole point of the toggle
       if ( state.sickle ) {
@@ -4472,6 +4916,15 @@ export function wireUI() {
     } );
     canvas.addEventListener( "pointerup", ( e ) => {
       cam.drag = null;
+      // the nick's lift: the gauge reads the needle where the hand stopped rather
+      // than where the track ended, so the drag is the read. No animal is answered
+      // to here: frightenBeasts belongs to the swathe's lift, and the small blade
+      // is the stand's tool - a nick never drives a beast off, never pays a hide
+      // a hit and never spends one
+      if ( state.ssickle ) {
+        endSmall();
+        return;
+      }
       // the swipe ends: the blade finishes its cut and lifts off the glass, and
       // the cue it earned is answered for the whole swathe at once
       if ( state.sickle ) {
@@ -4499,6 +4952,7 @@ export function wireUI() {
       cam.drag = null;
       cam.tap = null; // a finger that left the field mid-touch is not a tap
       if ( state.sickle ) endStroke(); // a hand that left the glass spent the swipe
+      if ( state.ssickle ) endSmall(); // and the same for a hand that left a nick
       setHover( -1, -1, 0 ); // the pointer left the field: nothing is outlined
       // and no animal is answered to: the pick is the cursor's, so leaving the
       // glass clears it rather than leaving a beast armed at the last place seen
@@ -4587,6 +5041,9 @@ export function frame( now ) {
   // environment is paused or running - the arm belongs to the viewer, not to the
   // field's own clock
   stepSickle( now );
+  // the nick's own arm rides the same camera and follows the same framing, so it
+  // is stepped on the same pass as the swathe's rather than in the scene graph
+  stepSmallRig();
   // the wave train is a per-plant CPU pass, so it only runs when the
   // environment is actually moving
   if ( !state.paused )
@@ -4684,6 +5141,11 @@ export function frame( now ) {
         // run, which is what keeps a field that has never been run through
         // reading the way it did before
         ( combo.streak > 1 ? " · combo " + combo.streak : "" ) +
+        // the nick's own line: named for as long as its verdict is fresh rather
+        // than as a running tally, since the nick's answer is about the line the
+        // hand drew rather than about the swathe's whole stand. A miss names
+        // nothing, which is what a nick that cut nothing has to say
+        ( small.taken > 0 && performance.now() - small.takenAt < SKILL.verdict * 1000 ? " · nicked " + small.taken : "" ) +
         // the ring the hand works in: both tools answer to it, so the rule that
         // decides what a click can cut is legible rather than something the
         // viewer has to guess from a dead click. hand.reach is that ring as the
@@ -4865,6 +5327,24 @@ export function start() {
       reapStroke,
       endStroke,
       paintStroke,
+      // the nick's own mode, record and pose: the line the hand drew, the standing
+      // stalks that line touched and the band it used, so a harness can read what
+      // a nick did rather than infer it from pixels or from the plants it left
+      small,
+      SSICKLE,
+      smallRig,
+      setSmall,
+      revealSmall,
+      beginSmall,
+      reapSmallStroke,
+      endSmall,
+      // the frame loop and the gate the readout refreshes on: the readout is
+      // dressed in the loop rather than on demand, so a harness that wants the
+      // readout as the answer an outcome just gave asks the page for one frame
+      // with the gate pushed back rather than waiting out half a second and
+      // missing the window a fresh answer is named in
+      perf,
+      frame,
       // the url knobs, so a harness can read the hour length it is actually
       // running under rather than assume it
       params,

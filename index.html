@@ -48,10 +48,18 @@
         the sickle toggle is one button rather than a pair: it flips a mode, so
         the button itself says which mode is live by carrying .on, which is the
         same state app.js reads for the pointer handlers
+
+        the small blade rides the same row rather than a row of its own: it is
+        hidden until the shop has sold it, so a field nobody has bought it in
+        lays out exactly as it did, and the one row keeps the bar one deep on a
+        landscape phone. The two blades are one hand at a time - app.js clears
+        the other mode when either is drawn
       -->
       <div class="row tool">
         <span class="label">Sickle</span>
         <button data-action="sickle">Sickle</button>
+        <span class="label small" id="smalllabel" hidden>S SICKLE</span>
+        <button class="small" data-action="ssickle" id="smallbtn" hidden>S SICKLE</button>
       </div>
 
     </section>
@@ -189,6 +197,19 @@
         <span class="name">Gilded Sickle</span>
         <button class="buy" data-buy="gild"></button>
         <span class="note">every cut pays one gold more</span>
+      </div>
+
+      <!--
+        the small blade is the card's one piece that hands back a control rather
+        than a number: buying it only says the nick is carried, and the row that
+        puts it on the bar opens under the sickle row once the purchase has
+        landed - a player who wants the swathe back never has to buy anything
+        again to get it
+      -->
+      <div class="row kit">
+        <span class="name">S SICKLE</span>
+        <button class="buy" data-buy="ssickle"></button>
+        <span class="note">a 0.2 s nick: the gauge decides whether the line cut, and no animal is touched</span>
       </div>
 
       <!--

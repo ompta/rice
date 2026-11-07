@@ -679,6 +679,29 @@ html.touch .tool button {
   min-height: 32px;
 }
 
+/* the small blade's own button shares the row and the .on state, so it only
+   needs the tells that make it read as the smaller ask rather than as a second
+   blade: a narrower target and the dim ink the labels already carry. It is
+   hidden by app.js until the shop has sold it, and the attribute is what the
+   stylesheet keys display on - the same trick the shop card uses - so a field
+   nobody has bought it in lays the row out exactly as it did before */
+.row.tool > [hidden] {
+  display: none;
+}
+
+.tool button.small {
+  min-width: 40px;
+  color: var(--ink-dim);
+}
+
+.tool button.small.on {
+  /* the nick is live rather than the swathe: one lit button on the row at a
+     time, since app.js clears the other mode when either is drawn */
+  color: #eef6df;
+  background: rgba(159, 192, 106, 0.12);
+  border-color: rgba(159, 192, 106, 0.42);
+}
+
 .skill .needle {
   position: absolute;
   top: -4px;
