@@ -54,17 +54,31 @@
         <button data-action="sickle">Sickle</button>
       </div>
 
-      <!--
-        the shop row is the bar's second control: a thumb on it opens or closes
-        the card the field's kit sits on, and the b key takes the same flip on a
-        keyboard, which is what keeps a phone and a desktop agreeing about one
-        mode rather than two
-      -->
+    </section>
+
+    <!--
+      The shop control now hangs at the top of the left edge rather than riding
+      the bar: the bar keeps only the sickle and its corner of the glass, and the
+      card the kit sits on opens just under this button, so the button stays a
+      thumb's target while the card is on the glass. The b key takes the same
+      flip, which is what keeps a phone and a desktop agreeing about one mode
+      rather than two
+    -->
+    <section id="shopbtn" class="shopbtn" aria-label="Shop control">
       <div class="row shop">
         <span class="label">Shop</span>
         <button data-action="shop">Shop</button>
       </div>
+    </section>
 
+    <!--
+      The hold-to-elevate pair now hangs at the top of the right edge: the seat
+      starts 40 cm above the paddy floor and these two take it up or down from
+      there, so the control that moves the eye sits at the corner the eye moves
+      along. A desktop has E / Q for the same rise, but the pair is on the glass
+      on every layout rather than only on a phone.
+    -->
+    <section id="rigbtn" class="rigbtn" aria-label="Elevate controls">
       <div class="row rig">
         <span class="label">Elevate</span>
         <button class="hold" data-hold="1">Rise</button>
@@ -190,8 +204,9 @@
       afternoon and golden hour on the frame clock (one minute each by default, ?light=
       pins one). Wind, pause and the walk are keyboard-only - Shift+Arrow nudges
       the wind, Space toggles pause, k draws or sheathes the sickle, v swaps the
-      framing, b opens or closes the shop card, and the arrow keys / WASD walk. The
-      rig row stays because a phone has no E / Q.
+      framing, b opens or closes the shop card, and the arrow keys / WASD walk.
+      The hold-to-elevate pair sits at the top of the right edge because it is
+      the seat's own height, which starts 40 cm above the paddy floor.
     -->
 
     <!--

@@ -42,19 +42,19 @@ body {
 }
 
 /* -------------------------------------------------------------- panel -- */
-/* the wordmark, the view row, the light row and the old camera / wind / playback
-   rows are all gone, so the canvas carries the whole first impression and the bar
-   is a single row deep on a desktop (the rig row only arrives with .touch) - which
-   is what let every inset, gap and button here shrink */
+/* the bar now carries only the sickle row: the shop control hangs at the top of
+   the left edge and the hold-to-elevate pair at the top of the right, so the
+   canvas keeps its corners and the bar is as small as one row of a 7 px label
+   and an 8 px button needs */
 .panel {
   position: fixed;
   left: 10px;
   bottom: 10px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 5px 8px;
-  border-radius: 6px;
+  gap: 3px;
+  padding: 3px 6px;
+  border-radius: 5px;
   background: var(--panel);
   border: 1px solid var(--panel-line);
   backdrop-filter: blur(6px) saturate(120%);
@@ -68,7 +68,7 @@ body {
 }
 
 .label {
-  font-size: 8px;
+  font-size: 7px;
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--ink-dim);
@@ -76,14 +76,14 @@ body {
 }
 
 button {
-  font-size: 9px;
+  font-size: 8px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--ink-dim);
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid var(--panel-line);
   border-radius: 3px;
-  padding: 3px 7px;
+  padding: 2px 6px;
   cursor: pointer;
 }
 
@@ -96,6 +96,44 @@ button.on {
   color: #eef6df;
   background: rgba(159, 192, 106, 0.18);
   border-color: rgba(159, 192, 106, 0.5);
+}
+
+/* the shop control at the top of the left edge and the hold-to-elevate pair at
+   the top of the right: same dressing as the bar, one row deep each, so the
+   glass keeps all four of its corners and the readout keeps the lower right.
+   They paint above the animal bars and the drawn stroke (z-index 6) rather than
+   under them, since a control a finger has to hit cannot be a gauge that only
+   decorates */
+.shopbtn {
+  position: fixed;
+  left: 10px;
+  top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 6px;
+  border-radius: 5px;
+  background: var(--panel);
+  border: 1px solid var(--panel-line);
+  backdrop-filter: blur(6px) saturate(120%);
+  -webkit-backdrop-filter: blur(6px) saturate(120%);
+  z-index: 7;
+}
+
+.rigbtn {
+  position: fixed;
+  right: 10px;
+  top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 6px;
+  border-radius: 5px;
+  background: var(--panel);
+  border: 1px solid var(--panel-line);
+  backdrop-filter: blur(6px) saturate(120%);
+  -webkit-backdrop-filter: blur(6px) saturate(120%);
+  z-index: 7;
 }
 
 /* the wind slider (.track / .handle), the readout spans (.readout), the camera
@@ -120,7 +158,9 @@ button.on {
 .err {
   position: fixed;
   right: 20px;
-  top: 20px;
+  /* the elevate pair owns the top of the right edge, so the refusal starts
+     under it rather than trading that corner with two buttons */
+  top: 56px;
   font-family: ui-monospace, monospace;
   font-size: 12px;
   color: #ffb3a8;
@@ -136,10 +176,9 @@ button.on {
 @media (max-width: 760px) {
   .panel {
     left: 8px;
-    right: 8px;
     bottom: 8px;
-    gap: 4px;
-    padding: 5px 8px;
+    gap: 3px;
+    padding: 3px 6px;
   }
 
   .row {
@@ -154,13 +193,15 @@ button.on {
 
 /* --------------------------------------------------------------- shop -- */
 /* The kit the purse buys. One fixed card in the sky rather than a row on the
-   bar: the bar stays one row deep on a desktop, and the card only arrives when
-   app.js drops the hidden attribute it owns - the stylesheet keys display on
-   that attribute, so a closed card pays the layout nothing at all. */
+   bar: the shop control owns the top of the left edge and the card opens just
+   under it, so the button that opens or closes the card stays a thumb's target
+   while the card is on the glass. The card only arrives when app.js drops the
+   hidden attribute it owns - the stylesheet keys display on that attribute, so
+   a closed card pays the layout nothing at all. */
 .shopcard {
   position: fixed;
   left: 10px;
-  top: 10px;
+  top: 46px;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -265,11 +306,17 @@ html.touch .shopcard button {
 }
 
 html.touch .shopcard {
-  /* the bar owns the bottom edge and the pad the lower right, so the card goes
-     across the top of the glass at a phone width */
+  /* the shop control owns the top of the left and the elevate pair the top of
+     the right, so the card starts under that strip and still spans a phone
+     width rather than trading corners with either control. The readout row is
+     the next strip down, so the card opens under it too: the readout is the
+     one thing a player wants legible while a price is on the glass, and the
+     card paints above it (z-index 5 against the readout's own layer) rather
+     than swallowing it. The room left below is what the pad and the day bar
+     keep for themselves */
   left: 8px;
   right: 8px;
-  top: 8px;
+  top: 116px;
 }
 
 /* ------------------------------------------------------ the hand's bar -- */
@@ -441,14 +488,18 @@ html.touch .pad {
   pointer-events: none;
 }
 
-/* the row of hold-to-elevate buttons only exists where there are no E / Q
-   keys, so it stays out of the panel flow until .touch arrives */
-.rig {
-  display: none;
+/* the hold-to-elevate pair is no longer a phone-only row: it hangs at the top
+   of the right edge on every layout, so the seat's own height is a control a
+   desktop can hold a mouse button on as well as a thumb on the glass. The
+   phone hugs the corners tighter than a desktop window does */
+html.touch .rigbtn {
+  right: 8px;
+  top: 8px;
 }
 
-html.touch .rig {
-  display: flex;
+html.touch .shopbtn {
+  left: 8px;
+  top: 8px;
 }
 
 html.touch button {
@@ -464,39 +515,53 @@ html.touch button {
 }
 
 html.touch .panel {
-  /* the bar spans the whole bottom edge rather than hugging the left: at a
-     phone width a narrow panel would wrap the rows into a stack, which eats the
-     framing. Full width keeps each row on one line, and with the light, camera,
-     wind and playback rows gone the bar is only the sickle row plus the rig row -
-     two rows deep on a portrait phone, one on a landscape phone where .rig is
-     hidden - so the thumb pad keeps its glass */
+  /* the bar now carries only the sickle row, so it hugs the lower left corner
+     rather than spanning the bottom edge: the pad keeps the lower right, the
+     shop control keeps the top of the left and the elevate pair keeps the top
+     of the right, and app.js parks the pad above whatever height this came out
+     to - which is one row of a 32px button */
   left: 8px;
-  right: 8px;
   bottom: 8px;
-  gap: 4px;
-  padding: 6px 9px;
+  gap: 3px;
+  padding: 4px 7px;
 }
 
 html.touch .stats {
-  /* the pad owns the lower right, so the readout goes up to the sky */
+  /* the pad owns the lower right and the elevate pair owns the top of that
+     same edge, so the readout starts under the pair rather than at the corner
+     the pair now stands in */
   right: 14px;
-  top: 14px;
+  top: 56px;
   bottom: auto;
 }
 
-@media (pointer: coarse, orientation: landscape) {
+@media ( orientation: landscape ) and ( max-height: 500px ) {
+  /* a landscape window barely taller than the strips is a phone turned on its
+     side rather than a desktop: the rules below are all keyed on the touch
+     class, so the height bound is what names the short glass the phone has and
+     lets a touch tablet with room to spare keep the larger targets */
   html.touch button {
     /* a landscape phone is barely taller than the bar, so the tap targets
-       shrink to the smallest size a thumb still hits reliably. With the light
-       row gone the bar is a single row here (.rig is hidden below), which is
-       what bought the room */
+       shrink to the smallest size a thumb still hits reliably. The bar is a
+       single row here now, which is what bought the room */
     min-height: 28px;
   }
 
-  html.touch .rig {
-    /* elevation is the one control a landscape phone has no room for: the two
-       framings already set the eye height, and the pad owns the walk */
-    display: none;
+  html.touch .rigbtn {
+    /* the pair no longer competes with the bar for the bottom edge: it hangs
+       at the top of the right, where a landscape phone has the strip it needs
+       even though it is short. The buttons keep the smaller tap target above */
+    top: 6px;
+  }
+
+  html.touch .health {
+    /* the glass is barely taller than the two strips at the top, so the card
+       that opens under them reaches past the middle of the left edge: the day
+       bar takes the middle of the right instead, where the elevate pair hangs
+       above it and the walk pad sits below it. The fill still grows off the
+       bar's own left edge, so the share of the day reads the same way */
+    left: auto;
+    right: 10px;
   }
 }
 

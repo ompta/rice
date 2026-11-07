@@ -138,12 +138,12 @@ export const params = (() => {
     // should not be paying for a bear on top of it
     beast: Math.max( 0, Math.round( num( "beast", 4 ) ) ),
     // how far the hand works, in metres: the radius of the ring around the
-    // player inside which either tool cuts. Two metres is arm's length, which
-    // is what makes the stand the player is standing in the stand that gets
-    // cut rather than the whole field. ?reach= moves the ring - a harness that
-    // is about something other than the reach pins it wide so the ring never
-    // quietly decides its result
-    reach: num( "reach", 2 ),
+    // player inside which either tool cuts. Two and a half metres is an arm
+    // plus the swing the snath gives it, which is what makes the stand the
+    // player is standing in the stand that gets cut rather than the whole
+    // field. ?reach= moves the ring - a harness that is about something other
+    // than the reach pins it wide so the ring never quietly decides its result
+    reach: num( "reach", 2.5 ),
   };
 })();
 
@@ -732,11 +732,12 @@ Object.defineProperty( hover, "beast", { value: null, writable: true, enumerable
 // further away than the arm is not a wasted check - it arms nothing at all.
 //
 // The ring is measured in the field plane from the player's own seat rather
-// than from the eye: the eye sits a head above the ground, so a plant two
-// metres out is two metres out whatever the framing's height is. Measuring to
-// the eye instead would make the reach quietly grow every time the eye got
-// higher, which is what the open framing would do - and the two framings would
-// disagree about how far the same hand is.
+// than from the eye: the seat's height is free - the opening framing stands
+// 40 cm over the mud and the Elevate pair takes it up to 9 m - so a plant two
+// and a half metres out is two and a half metres out whatever the framing's
+// height is. Measuring to the eye instead would make the reach quietly grow
+// every time the eye got higher, which is what the open framing would do - and
+// the two framings would disagree about how far the same hand is.
 //
 // The hover pick deliberately stays outside this rule: a viewer can outline and
 // inspect a plant anywhere in the field, and only the two tools that cut answer
@@ -3664,7 +3665,13 @@ export function buildField() {
 // authored rather than fighting whatever the viewer wandered to.
 // ---------------------------------------------------------------------------
 const VIEWS = {
-  open: { x: 0.55, y: 1.78, z: 6.4, pitch: 2.55, yaw: 0.0, fov: 48.5 },
+  // the opening seat starts 40 cm above the paddy floor rather than a head
+  // above the crop: the eye starts down in the stand, and the Elevate pair
+  // (and E / Q) takes it up from there, which is what makes the field open on
+  // a view out of the rice rather than over it. WALK.minY is the same 40 cm,
+  // so the framing the field opens on is also the lowest seat the hand works
+  // from and the start of the elevation is a number rather than a walk
+  open: { x: 0.55, y: 0.4, z: 6.4, pitch: 2.55, yaw: 0.0, fov: 48.5 },
   among: { x: -0.3, y: 1.02, z: 0.1, pitch: -1.4, yaw: 0.12, fov: 42 },
 };
 
@@ -3678,7 +3685,7 @@ const WALK = {
   maxX: 120,
   minZ: -92,
   maxZ: 13,
-  minY: 0.45, // eye height never goes below the rice
+  minY: 0.4, // never below the 40 cm the opening seat starts at, so the field's own start is the floor of the elevation
   maxY: 9, // and never becomes a map view
   dragPitch: 0.3,
   dragSens: 0.0045, // radians per pixel of drag
@@ -4022,10 +4029,10 @@ export function setSickle( v ) {
 }
 
 export function wireUI() {
-  // the bar now carries two actions rather than one: the sickle flips a mode the
-  // pointer answers to and the shop opens or closes the card the kit sits on.
-  // The framing is still reached with the v key and with ?view= in the url, which
-  // is why setView stays exported
+  // the actions are still found by their data-action rather than by where they
+  // sit: the sickle is the bar at the lower left and the shop flip is its own
+  // control at the top of the left edge. The framing is still reached with the
+  // v key and with ?view= in the url, which is why setView stays exported
   for ( const node of document.querySelectorAll( "[data-action]" ) ) {
     const action = node.getAttribute( "data-action" );
     node.addEventListener( "click", ( e ) => {
