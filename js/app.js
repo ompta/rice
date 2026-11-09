@@ -2347,8 +2347,13 @@ export const SSICKLE = {
   // runs the track out and is a miss
   sweep: 0.9,
   band: 7, // canvas px either side of the line the small blade reaches
-  stub: 0.6, // stubble the nick leaves: a hand-high cut rather than a scythe's
-  vary: 0.5, // how much that stubble wanders along one nick
+  // the stubble the nick leaves: the same short stub a normal cut leaves, so a
+  // nicked plant reads as a cut rather than as a stalk still standing. What makes
+  // the nick a nick is its own line, band and cap rather than a taller stub, and
+  // taking the stub from the swathe keeps one stubble for both blades when either
+  // is retuned
+  stub: SICKLE.stub, // the swathe's stubble, so both blades leave one stubble
+  vary: SICKLE.vary, // the same wander, so the two cuts read as the same cut
   max: 18, // plants one nick may take at most
   widen: 1.5, // how much wider than the live bands the nick's own target is
   // where the item sits in the frame: the same seat as the swathe, a hand's
@@ -2741,12 +2746,14 @@ export function endSmall() {
   endSmallDrag();
 }
 
-/* what a pass takes off the stand: every stalk the nick's line filed, at the nick's
-   own stubble - a hand-high cut rather than a scythe's, which is what a small blade
-   leaves behind. A miss never calls this, so the filed stalks are still standing
-   when the verdict has landed and the readout counts nothing. The stand is re-read
-   here rather than at the line, so a stalk something else already took is not taken
-   a second time and a nick cannot pay the stubble twice */
+/* what a pass takes off the stand: every stalk the nick's line filed, at the same
+   short stubble a normal cut leaves - the small blade's own line, band and cap are
+   what make it a nick, and what it leaves behind is the same stub a swathe leaves,
+   so a nicked plant never reads as a stalk still standing. A miss never calls this,
+   so the filed stalks are still standing when the verdict has landed and the readout
+   counts nothing. The stand is re-read here rather than at the line, so a stalk
+   something else already took is not taken a second time and a nick cannot pay the
+   stubble twice */
 function cutSmall() {
   let took = 0;
   for ( let k = 0; k < small.cut.length; k++ ) {
