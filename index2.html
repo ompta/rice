@@ -1,0 +1,873 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>N-Back — Phaser 3 (CDN)</title>
+<style>
+  html, body { height: 100%; margin: 0; background: #05070f; color: #d9e2f4;
+    font-family: "Segoe UI", system-ui, -apple-system, Arial, sans-serif; }
+  body { display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  #hdr  { order: 1; text-align: center; }
+  #stage { order: 2; display: flex; justify-content: center; }
+  #foot { order: 3; text-align: center; font-size: 12px; opacity: .6; margin-top: 12px; }
+  #loaderr { order: 2; font-size: 15px; color: #ff8b8b; padding: 12px; }
+  #hdr h1 { font-size: 24px; letter-spacing: 4px; margin: 8px 0 2px; color: #7ee6d0; }
+  #hdr div { font-size: 13px; opacity: .75; }
+  canvas { display: block; max-width: 96vw; height: auto; box-shadow: 0 18px 44px rgba(0,0,0,.6); }
+</style>
+
+<!-- Phaser 3 from CDN (single global: window.Phaser) -->
+<script src="https://cdn.jsdelivr.net/npm/phaser@3.80.1/dist/phaser.min.js"></script>
+</head>
+<body>
+  <div id="hdr"><h1>N-BACK</h1><div>Phaser 3 · one HTML file · zero assets (art + audio generated at runtime)</div></div>
+  <div id="stage"></div>
+  <div id="foot">Phaser 3.80.1 from jsDelivr (unpkg fallback) · keyboard + mouse · Web Audio formant synth</div>
+  <div id="loaderr"></div>
+
+  <script>
+  (function () {
+  'use strict';
+
+  /* ============================================================
+     0. PHASER BOOTSTRAP — CDN with fallback + graceful failure
+     ============================================================ */
+  var CDN_PRIMARY  = 'https://cdn.jsdelivr.net/npm/phaser@3.80.1/dist/phaser.min.js';
+  var CDN_FALLBACK = 'https://unpkg.com/phaser@3.80.1/dist/phaser.min.js';
+
+  function showLoadError(msg) {
+    var el = document.getElementById('loaderr');
+    if (el) el.textContent = msg;
+  }
+
+  /* If the primary CDN was blocked, load the fallback and start from its
+     onload. We must return before the `class ... extends Phaser.Scene`
+     declaration below is evaluated, otherwise it would throw. */
+  if (!window.Phaser) {
+    showLoadError('Primary Phaser CDN blocked — retrying from unpkg…');
+    var fb = document.createElement('script');
+    fb.src = CDN_FALLBACK;
+    fb.onload = function () {
+      if (window.Phaser) { showLoadError(''); startGame(); }
+      else { showLoadError('Phaser script loaded but the Phaser global is missing.'); }
+    };
+    fb.onerror = function () {
+      showLoadError('Could not load Phaser from any CDN — check your connection or ad-blocker.');
+    };
+    document.head.appendChild(fb);
+    return;
+  }
+
+  /* Hoisted: safe to reference from the bootstrap block above. */
+  function startGame() {
+    new Phaser.Game({
+      type: Phaser.AUTO,
+      width: GW, height: GH,
+      background: '#0a0f1e',
+      parent: document.getElementById('stage'),
+      scene: NBackScene
+    });
+  }
+
+  /* ============================================================
+     1. AUDIO — procedural "Duhfeldt" style formant sounds
+        (no asset files: everything is synthesised with Web Audio)
+     ============================================================ */
+  var AC = null, MASTER = null, NOISE = null, SOUND_ON = true;
+  try {
+    AC = new (window.AudioContext || window.webkitAudioContext)();
+    MASTER = AC.createGain();
+    MASTER.gain.value = 0.75;
+    MASTER.connect(AC.destination);
+  } catch (e) { AC = null; MASTER = null; }
+
+  function noiseBuf() {
+    if (!AC) return null;
+    if (NOISE) return NOISE;
+    var n = Math.floor(AC.sampleRate * 0.5);
+    NOISE = AC.createBuffer(1, n, AC.sampleRate);
+    var d = NOISE.getChannelData(0);
+    for (var i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+    return NOISE;
+  }
+
+  function env(g, t0, dur, peak, attack, release) {
+    var a = Math.min(attack, dur * 0.4);
+    var r = Math.min(release, dur * 0.6);
+    g.gain.setValueAtTime(0, t0);
+    g.gain.linearRampToValueAtTime(peak, t0 + a);
+    g.gain.setValueAtTime(peak, t0 + dur - r);
+    g.gain.linearRampToValueAtTime(0, t0 + dur);
+  }
+
+  function tone(freq, t0, dur, peak, type) {
+    if (!AC) return;
+    var o = AC.createOscillator();
+    o.type = type || 'sine';
+    o.frequency.setValueAtTime(freq, t0);
+    var g = AC.createGain();
+    env(g, t0, dur, peak, 0.012, 0.05);
+    o.connect(g); g.connect(MASTER);
+    o.start(t0); o.stop(t0 + dur + 0.02);
+  }
+
+  /* A synthetic vowel = formant peaks (+ a voiced fundamental for body). */
+  function vowel(t0, dur, f, voiced) {
+    var spec = [[f[0], 1.00], [f[1], 0.42], [f[2], 0.16]];
+    if (voiced) { spec.push([110, 0.50]); spec.push([220, 0.22]); }
+    for (var i = 0; i < spec.length; i++) tone(spec[i][0], t0, dur, spec[i][1] * 0.16, 'sine');
+  }
+
+  /* Fricatives (s, f, sh) = noise + high-frequency sibilance boost. */
+  function fric(t0, dur, f, peak) {
+    var buf = noiseBuf();
+    if (!buf) return;
+    var src = AC.createBufferSource();
+    src.buffer = buf; src.loop = true; src.offset = Math.random() * 0.4;
+    var g = AC.createGain();
+    env(g, t0, dur, peak, 0.02, 0.05);
+    src.connect(g); g.connect(MASTER);
+    src.start(t0); src.stop(t0 + dur + 0.02);
+    tone(f[0], t0, dur, peak * 0.45, 'sine');
+    tone(f[1], t0, dur, peak * 0.22, 'sine');
+  }
+
+  /* Plosive burst (b / d / t). */
+  function plosive(t0, d, voiced) {
+    var buf = noiseBuf();
+    if (!buf) return;
+    var src = AC.createBufferSource();
+    src.buffer = buf; src.offset = Math.random() * 0.4;
+    var g = AC.createGain();
+    g.gain.setValueAtTime(0, t0);
+    g.gain.linearRampToValueAtTime(voiced ? 0.5 : 0.34, t0 + 0.006);
+    g.gain.exponentialRampToValueAtTime(0.001, t0 + d + 0.04);
+    src.connect(g); g.connect(MASTER);
+    src.start(t0); src.stop(t0 + d + 0.06);
+    if (voiced) tone(120, t0, d + 0.04, 0.22, 'sine');
+  }
+
+  /* The classic 7-letter Duhfeldt set, spelled out as sound segments. */
+  var LETTER_SND = {
+    'E': [{ k: 'v', f: [240, 2250, 3150], d: 0.34 }],
+    'B': [{ k: 'p', d: 0.05, v: true },  { k: 'v', f: [250, 2300, 3200], d: 0.26 }],
+    'D': [{ k: 'p', d: 0.04, v: false }, { k: 'v', f: [250, 2300, 3200], d: 0.26 }],
+    'C': [{ k: 's', f: [4200, 6200], d: 0.16 }, { k: 'v', f: [250, 2300, 3200], d: 0.24 }],
+    'F': [{ k: 'v', f: [640, 1900, 2900], d: 0.16 }, { k: 's', f: [3200, 4300], d: 0.18 }],
+    'A': [{ k: 'v', f: [620, 1550, 2850], d: 0.14 }, { k: 'v', f: [330, 2250, 3100], d: 0.18 }],
+    'H': [{ k: 'v', f: [620, 1550, 2850], d: 0.12 }, { k: 'v', f: [330, 2250, 3100], d: 0.12 },
+          { k: 'p', d: 0.03 }, { k: 's', f: [3600, 5200], d: 0.14 }]
+  };
+
+  function playLetter(L) {
+    if (!AC || !SOUND_ON) return;
+    var segs = LETTER_SND[L], t = AC.currentTime + 0.01;
+    for (var i = 0; i < segs.length; i++) {
+      var s = segs[i];
+      if (s.k === 'v') vowel(t, s.d, s.f, true);
+      else if (s.k === 's') fric(t, s.d, s.f, 0.30);
+      else plosive(t, s.d, s.v);
+      t += s.d;
+    }
+  }
+
+  /* Position sound: pitch encodes the row, timbre encodes the column. */
+  function playPosition(idx) {
+    if (!AC || !SOUND_ON) return;
+    var row = Math.floor(idx / 3), col = idx % 3;
+    var base = 165 * Math.pow(2, row * 3 / 12);
+    var ratio = [1, 1.5, 2][col];
+    var t = AC.currentTime + 0.01;
+    tone(base, t, 0.34, 0.30, 'sine');
+    tone(base * ratio, t, 0.34, 0.12 + col * 0.05, 'sine');
+    tone(base * 2.6, t, 0.30, 0.05 + col * 0.03, 'triangle');
+  }
+
+  function sfxGood() { if (!AC || !SOUND_ON) return; var t = AC.currentTime; tone(660, t, 0.10, 0.22); tone(990, t + 0.07, 0.12, 0.18); }
+  function sfxBad()  { if (!AC || !SOUND_ON) return; var t = AC.currentTime; tone(300, t, 0.16, 0.22, 'sawtooth'); tone(180, t + 0.09, 0.18, 0.20, 'sawtooth'); }
+  function sfxBlip() { if (!AC || !SOUND_ON) return; tone(520, AC.currentTime, 0.06, 0.16); }
+  function sfxStart(){ if (!AC || !SOUND_ON) return; var t = AC.currentTime; tone(440, t, 0.09, 0.2); tone(660, t + 0.08, 0.09, 0.2); tone(880, t + 0.16, 0.14, 0.22); }
+
+  /* ============================================================
+     2. GAME CONSTANTS + PURE LOGIC
+     ============================================================ */
+  var GW = 960, GH = 600;
+  var COLS = 3, ROWS = 3, NPOS = COLS * ROWS;
+  var LETTERS = ['E', 'H', 'A', 'D', 'F', 'B', 'C'];
+  var SPEEDS = [{ name: 'Slow', ms: 2600 }, { name: 'Normal', ms: 1900 }, { name: 'Fast', ms: 1400 }];
+  var LENGTHS = [12, 20, 28];
+  var MODES = [
+    { key: 'letters',   label: 'LETTERS',   dims: ['letter'],        desc: 'watch + listen to letters' },
+    { key: 'positions', label: 'POSITIONS', dims: ['pos'],           desc: 'watch + listen to the grid' },
+    { key: 'dual',      label: 'DUAL',      dims: ['letter', 'pos'], desc: 'letters AND grid at once' }
+  ];
+  var DIM_LABEL = { letter: 'LETTER', pos: 'POSITION' };
+
+  var G = {
+    state: 'setup',
+    n: 2, mode: 2, speed: 1, len: 1,
+    score: 0, best: 0, lives: 3, streak: 0,
+    hint: false, paused: false, pauseElapsed: 0,
+    round: null, msg: '', msg2: '',
+    totals: { hit: 0, miss: 0, fa: 0, cr: 0 }
+  };
+
+  function shuffle(a) {
+    for (var i = a.length - 1; i > 0; i--) {
+      var j = Math.floor(Math.random() * (i + 1));
+      var t = a[i]; a[i] = a[j]; a[j] = t;
+    }
+    return a;
+  }
+
+  function pickFrom(pool, forbidden) {
+    var ok = [];
+    for (var i = 0; i < pool.length; i++) if (pool[i] !== forbidden) ok.push(pool[i]);
+    if (!ok.length) ok = pool;
+    return ok[Math.floor(Math.random() * ok.length)];
+  }
+
+  /* Build a sequence with a controlled number of real matches per dimension. */
+  function buildSequence(n, len, dims) {
+    var judgeable = len - n;
+    var target = Math.max(1, Math.round(judgeable * 0.25));
+    var force = {};
+    for (var d = 0; d < dims.length; d++) {
+      var idxs = [];
+      for (var k = n; k < len; k++) idxs.push(k);
+      shuffle(idxs);
+      var set = {};
+      for (var m = 0; m < Math.min(target, idxs.length); m++) set[idxs[m]] = true;
+      force[dims[d]] = set;
+    }
+    var items = [];
+    for (var i = 0; i < len; i++) {
+      var prev = (i - n >= 0) ? items[i - n] : null;
+      var it = { letter: null, pos: -1 };
+      for (var q = 0; q < dims.length; q++) {
+        var dim = dims[q];
+        if (dim === 'letter') {
+          it.letter = (prev && force.letter && force.letter[i]) ? prev.letter
+                     : pickFrom(LETTERS, prev ? prev.letter : null);
+        } else {
+          it.pos = (prev && force.pos && force.pos[i]) ? prev.pos
+                  : pickFrom([0, 1, 2, 3, 4, 5, 6, 7, 8], prev ? prev.pos : -99);
+        }
+      }
+      items.push(it);
+    }
+    return items;
+  }
+
+
+  /* ---- round lifecycle ---------------------------------------------------- */
+  function newRound() {
+    var mode = MODES[G.mode];
+    var len = LENGTHS[G.len];
+    G.round = {
+      n: G.n,
+      dims: mode.dims,
+      items: buildSequence(G.n, len, mode.dims),
+      i: -1,
+      pressed: {},
+      itemStart: 0,
+      speed: SPEEDS[G.speed].ms,
+      hit: 0, miss: 0, fa: 0, cr: 0,
+      points: 0
+    };
+    G.state = 'countdown';
+    G.cdStart = 0; G.cdNum = 3; G.cdBeeps = 0;
+    G.roundNo = (G.roundNo || 0) + 1;
+    G.msg = '';
+  }
+
+  function startItem(i) {
+    var R = G.round;
+    R.i = i;
+    R.pressed = {};
+    R.itemStart = NOW();
+    var it = R.items[i];
+    /* Dual mode overlaps both channels, exactly like the classic game. */
+    if (indexOf(R.dims, 'pos') >= 0) playPosition(it.pos);
+    if (indexOf(R.dims, 'letter') >= 0) playLetter(it.letter);
+  }
+
+  function judgeDim(dim, i) {
+    var R = G.round;
+    if (i < R.n) return null;                 /* nothing to compare yet */
+    var cur = R.items[i], prev = R.items[i - R.n];
+    var expected = (dim === 'letter') ? (cur.letter === prev.letter) : (cur.pos === prev.pos);
+    var pressed = !!R.pressed[dim];
+    if (expected && pressed) return 'hit';
+    if (expected && !pressed) return 'miss';
+    if (!expected && pressed) return 'fa';
+    return 'cr';
+  }
+
+  function applyResult(dim, res, i) {
+    var R = G.round, pts = 0, label = '';
+    if (res === 'hit') {
+      G.streak++;
+      pts = 100 + Math.min(G.streak, 10) * 15;
+      R.hit++; G.totals.hit++; label = '+' + pts + ' HIT';
+      sfxGood(); flash(0x39e4c8, 220);
+    } else if (res === 'cr') {
+      G.streak++;
+      pts = 10;
+      R.cr++; G.totals.cr++; label = '+' + pts + ' OK';
+    } else if (res === 'miss') {
+      G.streak = 0; G.lives--;
+      pts = -100;
+      R.miss++; G.totals.miss++; label = '-100 MISS';
+      sfxBad(); flash(0xff4f6b, 320);
+    } else {
+      G.streak = 0; G.lives--;
+      pts = -50;
+      R.fa++; G.totals.fa++; label = '-50 FALSE ALARM';
+      sfxBad(); flash(0xff4f6b, 320);
+    }
+    G.score += pts; R.points += pts;
+    if (G.score > G.best) G.best = G.score;
+    if (label) popText(dim, label, pts);
+  }
+
+  function resolveItem() {
+    var R = G.round, i = R.i;
+    for (var d = 0; d < R.dims.length; d++) {
+      var dim = R.dims[d];
+      var res = judgeDim(dim, i);
+      if (res) applyResult(dim, res, i);
+    }
+    R.pressed = {};
+    R.i++;
+    if (G.lives <= 0) { G.state = 'gameover'; sfxBad(); return; }
+    if (R.i >= R.items.length) { finishRound(); return; }
+    startItem(R.i);
+  }
+
+  function finishRound() {
+    var R = G.round;
+    var judged = R.hit + R.miss + R.fa + R.cr;
+    var acc = judged ? (R.hit + R.cr) / judged : 0;
+    G.lastAcc = acc;
+    G.state = 'results';
+    /* Auto-level the N up/down so the game is self-paced. */
+    if (acc >= 0.75 && R.hit > 0 && G.n < 4) { G.n++; G.msg = 'Accuracy ' + Math.round(acc * 100) + '% — N raised to ' + G.n; }
+    else if (acc < 0.4 && G.n > 1) { G.n--; G.msg = 'Accuracy ' + Math.round(acc * 100) + '% — N lowered to ' + G.n; }
+    else G.msg = 'Accuracy ' + Math.round(acc * 100) + '% — N stays at ' + G.n;
+    sfxStart();
+  }
+
+  /* ---- input mapping ------------------------------------------------------ */
+  function dimForKey(code) {
+    var dims = MODES[G.mode].dims;
+    if (code === 'Space') return dims.length === 1 ? dims[0] : 'pos';
+    if (code === 'KeyM') return dims.length === 1 ? dims[0] : 'letter';
+    if (code === 'KeyA') return 'letter';
+    if (code === 'KeyD') return 'pos';
+    return null;
+  }
+
+  function pressDim(dim) {
+    var R = G.round;
+    if (!R || R.i < 0) return;
+    if (indexOf(R.dims, dim) < 0) return;
+    if (R.pressed[dim]) return;      /* one press per item per dimension */
+    R.pressed[dim] = true;
+    sfxBlip();
+  }
+
+  /* ---- tiny helpers shared with the renderer ------------------------------ */
+  function indexOf(arr, v) { return arr.indexOf(v); }
+
+  /* Own clock: never depends on Phaser's internal time manager. */
+  function NOW() {
+    try { return performance.now(); } catch (e) { return Date.now(); }
+  }
+
+  var flashState = { color: 0x000000, until: 0 };
+  function flash(color, ms) { flashState.color = color; flashState.until = NOW() + ms; }
+
+  var pops = [];
+  function popText(dim, label, pts) {
+    if (SCENE) SCENE.popText(dim, label, pts);
+  }
+
+  var SCENE = null;   /* set by the Phaser scene when it builds */
+
+
+
+  /* ============================================================
+     3. PHASER SCENE — rendering + input glue
+     ============================================================ */
+  var FONT = '"Segoe UI", "Trebuchet MS", Arial, sans-serif';
+  var CELL = 92, GAP = 14;
+  var GRID_W = COLS * CELL + (COLS - 1) * GAP;
+  var GRID_H = ROWS * CELL + (ROWS - 1) * GAP;
+  var GX = (GW - GRID_W) / 2, GY = 140;
+  var CX = GW / 2, CY = GY + GRID_H / 2;
+  var BTN = {
+    letter: { x: 56, y: 238, w: 210, h: 108 },
+    pos:    { x: 694, y: 238, w: 210, h: 108 }
+  };
+  var PANEL = { x: 60, y: 100, w: 840, h: 320 };
+  var START_BTN = { x: GW / 2 - 120, y: 436, w: 240, h: 52 };
+
+  class NBackScene extends Phaser.Scene {
+
+    /* ---------- build: create persistent display objects ---------- */
+    build() {
+      SCENE = this;
+      this.pops = [];
+      this.lastNow = NOW();
+
+      /* render order: bg -> grid -> letter panel -> buttons -> flash -> hud -> text */
+      this.bgG = this.add.graphics();
+      this.gridG = this.add.graphics();
+      this.panelG = this.add.graphics();
+      this.btnG = this.add.graphics();
+      this.flashG = this.add.graphics();
+      this.hudG = this.add.graphics();
+      this.paintBackground();
+
+      var st = function (size, color, align) {
+        return { fontSize: size, fontFamily: FONT, color: color, align: align || 'center' };
+      };
+
+      /* HUD texts (persistent, mutated every frame) */
+      this.tN = this.add.text(24, 30, '', st(30, '#ffffff')).setOrigin(0, 0.5);
+      this.tMode = this.add.text(CX, 30, '', st(20, '#7ee6d0')).setOrigin(0.5, 0.5);
+      this.tScore = this.add.text(GW - 24, 30, '', st(26, '#ffd98a')).setOrigin(1, 0.5);
+      this.tSub = this.add.text(CX, 66, '', st(14, '#9fb2d4')).setOrigin(0.5, 0.5);
+      this.tBest = this.add.text(GW - 24, 66, '', st(14, '#9fb2d4')).setOrigin(1, 0.5);
+      this.tStat = this.add.text(150, GH - 56, '', st(14, '#9fb2d4')).setOrigin(0, 0.5);
+
+      /* Button labels (created once, toggled per frame) */
+      this.btnLabel = {
+        letter: this.add.text(BTN.letter.x + BTN.letter.w / 2, BTN.letter.y + BTN.letter.h / 2, '', st(18, '#ffffff')).setOrigin(0.5, 0.5),
+        pos: this.add.text(BTN.pos.x + BTN.pos.w / 2, BTN.pos.y + BTN.pos.h / 2, '', st(18, '#ffffff')).setOrigin(0.5, 0.5)
+      };
+      this.btnLabel.letter.alpha = 0; this.btnLabel.pos.alpha = 0;
+      this.tLegend = this.add.text(CX, GH - 22, '', st(13, '#7488ab')).setOrigin(0.5, 0.5);
+
+      /* Screen texts */
+      this.tBig = this.add.text(CX, 150, '', st(40, '#ffffff')).setOrigin(0.5, 0.5);
+      this.tBody = this.add.text(CX, 250, '', {
+        fontSize: 16, fontFamily: FONT, color: '#c6d5f0', align: 'center',
+        lineSpacing: 8, wordWrap: { width: 780 }
+      }).setOrigin(0.5, 0.5);
+      this.tCd = this.add.text(CX, CY, '', st(120, '#7ee6d0')).setOrigin(0.5, 0.5);
+      this.tLetter = this.add.text(CX, CY, '', st(76, '#ffd98a')).setOrigin(0.5, 0.5);
+      this.tHintL = this.add.text(CX, CY - 96, '', st(22, '#7ee6d0')).setOrigin(0.5, 0.5);
+      this.tStart = this.add.text(CX, START_BTN.y + START_BTN.h / 2, 'START', st(20, '#0a0f1e')).setOrigin(0.5, 0.5);
+
+      this.tBig.alpha = 0; this.tBody.alpha = 0; this.tCd.alpha = 0;
+      this.tLetter.alpha = 0; this.tHintL.alpha = 0; this.tStart.alpha = 0;
+
+      this.bindDomInput();
+    }
+
+
+    /* ---------- DOM input (works even if Phaser's input plugins change) --- */
+    bindDomInput() {
+      var self = this;
+      window.addEventListener('keydown', function (e) {
+        if (e.repeat) return;
+        handleKey(e.code || '');
+      }, false);
+      var stage = document.getElementById('stage');
+      if (stage) {
+        stage.addEventListener('pointerdown', function (e) {
+          self.onPointer(e);
+        }, false);
+      }
+    }
+
+    onPointer(e) {
+      var cv = document.querySelector('#stage canvas') || document.querySelector('canvas');
+      if (!cv) return;
+      var r = cv.getBoundingClientRect();
+      if (!r.width || !r.height) return;
+      var x = (e.clientX - r.left) * (GW / r.width);
+      var y = (e.clientY - r.top) * (GH / r.height);
+      handleClick(x, y);
+    }
+
+    /* ---------- static background, painted once ---------- */
+    paintBackground() {
+      var g = this.bgG;
+      g.fillStyle(0x0a0f1e, 1);
+      g.fillRect(0, 0, GW, GH);
+      for (var i = 0; i < 8; i++) {
+        g.fillStyle(0x111a30, 0.45);
+        g.fillRect(0, 70 + i * 74, GW, 2);
+      }
+      g.fillStyle(0x0d1526, 0.94);
+      g.fillRect(0, 0, GW, 92);
+      g.fillStyle(0x0d1526, 0.94);
+      g.fillRect(0, GH - 110, GW, 110);
+      g.lineStyle(1, 0x24344f, 1);
+      g.lineBetween(0, 92, GW, 92);
+      g.lineBetween(0, GH - 110, GW, GH - 110);
+    }
+
+    /* ---------- per-frame driver ---------- */
+    update() {
+      var now = NOW();
+      this.lastNow = now;
+      this.tickState(now);
+      this.render(now);
+      this.cleanupPops(now);
+    }
+
+    tickState(now) {
+      var st = G.state;
+      if (st === 'countdown') {
+        if (!G.cdStart) G.cdStart = now;
+        var step = Math.floor((now - G.cdStart) / 700);
+        if (step >= 3) { G.state = 'play'; startItem(0); return; }
+        G.cdNum = 3 - step;
+        if (step > G.cdBeeps) { G.cdBeeps = step; sfxBlip(); }
+      } else if (st === 'play') {
+        if (G.paused) return;
+        var R = G.round;
+        if (!R) { newRound(); return; }
+        if (R.i < 0) { startItem(0); return; }
+        if (now >= R.itemStart + R.speed) resolveItem();
+      }
+    }
+
+    render(now) {
+      this.gridG.clear(); this.panelG.clear(); this.btnG.clear();
+      this.hudG.clear(); this.flashG.clear();
+
+      var st = G.state;
+      var live = (st === 'play');
+      var showGrid = (st === 'play' || st === 'countdown');
+
+      if (showGrid) this.drawGrid(now);
+      if (live) { this.drawLetterPanel(); this.drawButtons(); }
+      if (st === 'setup' || st === 'results' || st === 'gameover') this.drawPanelScreen();
+
+      this.drawHud(now);
+      this.drawFlash(now);
+      this.syncTexts(now);
+    }
+
+    /* ---------- stage drawing ---------- */
+    drawGrid(now) {
+      var g = this.gridG;
+      var R = G.round;
+      var active = -1, prev = -1, pulse = 0;
+      if (R && R.i >= 0) {
+        active = R.items[R.i].pos;
+        if (R.i >= R.n) prev = R.items[R.i - R.n].pos;
+        var el = (now - R.itemStart) / R.speed;
+        pulse = 1 - Math.min(1, Math.max(0, el));
+      }
+      for (var r = 0; r < ROWS; r++) {
+        for (var c = 0; c < COLS; c++) {
+          var idx = r * COLS + c;
+          var x = GX + c * (CELL + GAP), y = GY + r * (CELL + GAP);
+          if (idx === prev && G.hint) {
+            g.fillStyle(0x1a2438, 0.95);
+            g.fillRoundedRect(x, y, CELL, CELL, 12);
+            g.lineStyle(2, 0xffc86a, 0.85);
+            g.strokeRoundedRect(x + 5, y + 5, CELL - 10, CELL - 10, 8);
+          } else if (idx === active) {
+            g.fillStyle(0x2ee6c6, 0.45 + 0.45 * pulse);
+            g.fillRoundedRect(x, y, CELL, CELL, 12);
+            g.lineStyle(3, 0xffffff, 0.9);
+            g.strokeRoundedRect(x, y, CELL, CELL, 12);
+          } else {
+            g.fillStyle(0x121a2c, 0.95);
+            g.fillRoundedRect(x, y, CELL, CELL, 12);
+            g.lineStyle(1.5, 0x273450, 1);
+            g.strokeRoundedRect(x, y, CELL, CELL, 12);
+          }
+        }
+      }
+    }
+
+    drawLetterPanel() {
+      var R = G.round;
+      this.tLetter.alpha = 0;
+      this.tHintL.alpha = 0;
+      if (!R || R.i < 0) return;
+      var L = R.items[R.i].letter;
+      if (!L) return;
+      var p = this.panelG;
+      p.fillStyle(0x0a1122, 0.78);
+      p.fillRoundedRect(CX - 72, CY - 72, 144, 144, 16);
+      p.lineStyle(2.5, 0xffc86a, 0.95);
+      p.strokeRoundedRect(CX - 72, CY - 72, 144, 144, 16);
+      this.tLetter.setText(L);
+      this.tLetter.alpha = 1;
+      if (G.hint && R.i >= R.n && R.items[R.i - R.n].letter) {
+        this.tHintL.setText(R.items[R.i - R.n].letter);
+        this.tHintL.alpha = 0.9;
+      }
+    }
+
+    drawButtons() {
+      var R = G.round;
+      var dims = MODES[G.mode].dims;
+      var slots = ['letter', 'pos'];
+      for (var i = 0; i < slots.length; i++) {
+        var dim = slots[i], b = BTN[dim];
+        var enabled = dims.indexOf(dim) >= 0;
+        if (!enabled) { this.btnLabel[dim].alpha = 0; continue; }
+        var pressed = R && R.pressed[dim];
+        this.btnG.fillStyle(pressed ? 0xffc86a : 0x1b2740, pressed ? 0.92 : 0.85);
+        this.btnG.fillRoundedRect(b.x, b.y, b.w, b.h, 14);
+        this.btnG.lineStyle(2, pressed ? 0xffffff : 0x3f5a86, 1);
+        this.btnG.strokeRoundedRect(b.x, b.y, b.w, b.h, 14);
+        this.btnLabel[dim].setText((dim === 'letter' ? 'MATCH LETTER' : 'MATCH POSITION') +
+          (pressed ? '\npressed' : ''));
+        this.btnLabel[dim].alpha = 1;
+      }
+    }
+
+    drawPanelScreen() {
+      var p = this.panelG;
+      p.fillStyle(0x101a2e, 0.96);
+      p.fillRoundedRect(PANEL.x, PANEL.y, PANEL.w, PANEL.h, 18);
+      p.lineStyle(2, 0x2f4a6a, 1);
+      p.strokeRoundedRect(PANEL.x, PANEL.y, PANEL.w, PANEL.h, 18);
+      var b = START_BTN;
+      p.fillStyle(0x2ee6c6, 0.92);
+      p.fillRoundedRect(b.x, b.y, b.w, b.h, 12);
+      this.tStart.alpha = 1;
+    }
+
+    /* ---------- HUD drawing ---------- */
+    drawHud(now) {
+      var g = this.hudG;
+      var R = G.round;
+      /* progress bar */
+      var bx = 240, bw = 480, by = GH - 92, bh = 12;
+      g.fillStyle(0x1a2438, 1);
+      g.fillRoundedRect(bx, by, bw, bh, 6);
+      if (R && R.items.length && R.i >= 0) {
+        var frac = (R.i + 1) / R.items.length;
+        g.fillStyle(0x2ee6c6, 0.9);
+        g.fillRoundedRect(bx, by, Math.max(6, bw * frac), bh, 6);
+      }
+      /* lives (hearts) */
+      for (var i = 0; i < 3; i++) {
+        var x = 40 + i * 34, y = GH - 56;
+        if (i < G.lives) g.fillStyle(0xff5a72, 1); else g.fillStyle(0x243048, 1);
+        g.fillCircle(x - 6, y - 3, 7);
+        g.fillCircle(x + 6, y - 3, 7);
+        g.beginPath();
+        g.moveTo(x - 12, y - 4);
+        g.lineTo(x + 12, y - 4);
+        g.lineTo(x, y + 12);
+        g.closePath();
+        g.fillPath();
+      }
+    }
+
+    drawFlash(now) {
+      if (now >= flashState.until) return;
+      var a = (flashState.until - now) / 320;
+      this.flashG.fillStyle(flashState.color, Math.min(0.35, a * 0.35));
+      this.flashG.fillRect(0, 0, GW, GH);
+    }
+
+    /* ---------- text sync (HUD + screens) ---------- */
+    syncTexts(now) {
+      var mode = MODES[G.mode];
+      this.tN.setText('N = ' + G.n);
+      this.tMode.setText(mode.label + ' N-BACK');
+      this.tScore.setText('SCORE ' + G.score);
+      this.tBest.setText('BEST ' + G.best);
+      this.tSub.setText(mode.desc + ' · ' + SPEEDS[G.speed].name + ' · ' + LENGTHS[G.len] +
+        ' items · hints ' + (G.hint ? 'ON' : 'OFF') + ' · sound ' + (SOUND_ON ? 'ON' : 'OFF'));
+      var R = G.round;
+      var judged = R ? (R.hit + R.miss + R.fa + R.cr) : 0;
+      var acc = judged ? Math.round((R.hit + R.cr) / judged * 100) : 0;
+      this.tStat.setText('streak ' + G.streak + ' · accuracy ' + acc + '% · lives ' + G.lives);
+      this.tLegend.setText('KEYS  SPACE/M match · A letter · D position · P pause · H hints · T sound · Esc setup');
+
+      var st = G.state;
+      this.tStart.alpha = (st === 'setup' || st === 'results' || st === 'gameover') ? 1 : 0;
+
+      if (st === 'setup') {
+        this.tBig.setText('SETUP');
+        this.tBig.alpha = 1;
+        this.tBody.setText(RULES);
+        this.tBody.alpha = 1;
+        this.tCd.alpha = 0;
+      } else if (st === 'countdown') {
+        this.tBig.setText('GET READY');
+        this.tBig.alpha = 1;
+        this.tCd.setText(String(G.cdNum));
+        this.tCd.alpha = 1;
+        this.tBody.alpha = 0;
+      } else if (st === 'play') {
+        this.tBody.alpha = 0;
+        this.tCd.alpha = 0;
+        if (G.paused) {
+          this.tBig.setText('PAUSED  (P to resume)');
+          this.tBig.alpha = 1;
+        } else {
+          this.tBig.alpha = 0;
+        }
+      } else if (st === 'results') {
+        var R2 = G.round;
+        var j = R2.hit + R2.miss + R2.fa + R2.cr;
+        var a2 = j ? Math.round((R2.hit + R2.cr) / j * 100) : 0;
+        this.tBig.setText('ROUND ' + G.roundNo + ' COMPLETE');
+        this.tBig.alpha = 1;
+        this.tCd.alpha = 0;
+        this.tBody.setText(
+          'hits ' + R2.hit + '   misses ' + R2.miss + '   false alarms ' + R2.fa +
+          '   correct rejections ' + R2.cr +
+          '\naccuracy ' + a2 + '%   round points ' + R2.points + '   total score ' + G.score +
+          '\n\n' + G.msg +
+          '\n\nSPACE = next round      R = back to setup'
+        );
+        this.tBody.alpha = 1;
+      } else if (st === 'gameover') {
+        this.tBig.setText('GAME OVER');
+        this.tBig.alpha = 1;
+        this.tCd.alpha = 0;
+        this.tBody.setText(
+          'Out of lives.\n\nscore ' + G.score + '   best ' + G.best +
+          '\ntotal hits ' + G.totals.hit + '   misses ' + G.totals.miss +
+          '   false alarms ' + G.totals.fa +
+          '\n\nSPACE = play again'
+        );
+        this.tBody.alpha = 1;
+      }
+    }
+
+    /* ---------- floating score popups ---------- */
+    popText(dim, label, pts) {
+      var b = BTN[dim] || BTN.letter;
+      var x = b.x + b.w / 2, y = b.y - 26;
+      var t = this.add.text(x, y, label, {
+        fontSize: 22, fontFamily: FONT, fontStyle: 'bold', align: 'center',
+        color: pts > 0 ? '#5df3cf' : '#ff6b81'
+      }).setOrigin(0.5, 0.5);
+      this.tweens.add({ targets: t, y: y - 60, alpha: 0, duration: 900, ease: 'quint.out' });
+      this.pops.push({ t: t, born: NOW() });
+    }
+
+    cleanupPops(now) {
+      for (var i = this.pops.length - 1; i >= 0; i--) {
+        if (now - this.pops[i].born > 1400) {
+          this.pops[i].t.destroy();
+          this.pops.splice(i, 1);
+        }
+      }
+    }
+  }
+
+  /* ============================================================
+     4. INPUT / STATE TRANSITIONS (framework independent)
+     ============================================================ */
+  var RULES =
+    'HOW TO PLAY\n' +
+    'A stream of items is played one at a time. Each item is shown and spoken.\n' +
+    'Press MATCH the moment the current item is the same as the item N steps earlier.\n' +
+    'Do not press when it is different. In DUAL mode the two channels are judged separately.\n\n' +
+    'SCORING\n' +
+    'hit +100 (+streak bonus)   correct rejection +10   miss -100   false alarm -50\n' +
+    'A miss or a false alarm costs one life. N auto-levels between rounds.\n\n' +
+    'CONTROLS\n' +
+    'SPACE or M = match (single-demand modes)      A = letter   D or SPACE = position (dual)\n' +
+    'Mouse: click the MATCH panels, the letter box, or the grid.\n\n' +
+    'SETUP KEYS\n' +
+    'N = N value (1-4)   M = mode   S = speed   L = length   H = training hints   T = sound\n\n' +
+    'Press SPACE to start.';
+
+  function inRect(x, y, r) {
+    return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+  }
+
+  function handleClick(x, y) {
+    var st = G.state;
+    if (st === 'setup' || st === 'results' || st === 'gameover') {
+      if (inRect(x, y, START_BTN)) {
+        if (st === 'gameover') resetAll();
+        newRound();
+        sfxStart();
+      }
+      return;
+    }
+    if (st !== 'play' || G.paused) return;
+    if (inRect(x, y, BTN.letter)) { pressDim('letter'); return; }
+    if (inRect(x, y, BTN.pos)) { pressDim('pos'); return; }
+    if (x >= CX - 72 && x <= CX + 72 && y >= CY - 72 && y <= CY + 72) { pressDim('letter'); return; }
+    if (x >= GX && x <= GX + GRID_W && y >= GY && y <= GY + GRID_H) { pressDim('pos'); }
+  }
+
+  function handleKey(code) {
+    var st = G.state;
+    if (st === 'setup') {
+      if (code === 'KeyN') { G.n = G.n % 4 + 1; sfxBlip(); }
+      else if (code === 'KeyM') { G.mode = (G.mode + 1) % MODES.length; sfxBlip(); }
+      else if (code === 'KeyS') { G.speed = (G.speed + 1) % SPEEDS.length; sfxBlip(); }
+      else if (code === 'KeyL') { G.len = (G.len + 1) % LENGTHS.length; sfxBlip(); }
+      else if (code === 'KeyH') { G.hint = !G.hint; sfxBlip(); }
+      else if (code === 'KeyT') { SOUND_ON = !SOUND_ON; sfxBlip(); }
+      else if (code === 'Space' || code === 'Enter') { newRound(); sfxStart(); }
+      return;
+    }
+    if (st === 'countdown') {
+      if (code === 'KeyT') SOUND_ON = !SOUND_ON;
+      return;
+    }
+    if (st === 'play') {
+      if (code === 'KeyP') { togglePause(); return; }
+      if (code === 'KeyT') { SOUND_ON = !SOUND_ON; return; }
+      if (code === 'Escape') { G.state = 'setup'; G.paused = false; return; }
+      if (G.paused) return;
+      var dim = dimForKey(code);
+      if (dim) pressDim(dim);
+      return;
+    }
+    if (st === 'results') {
+      if (code === 'Space' || code === 'Enter') { newRound(); sfxStart(); }
+      else if (code === 'KeyR') { G.state = 'setup'; }
+      return;
+    }
+    if (st === 'gameover') {
+      if (code === 'Space' || code === 'Enter') { resetAll(); newRound(); sfxStart(); }
+    }
+  }
+
+  function togglePause() {
+    var R = G.round;
+    if (!R) return;
+    if (!G.paused) {
+      G.paused = true;
+      G.pauseElapsed = NOW() - R.itemStart;
+    } else {
+      G.paused = false;
+      R.itemStart = NOW() - G.pauseElapsed;
+    }
+  }
+
+  function resetAll() {
+    G.score = 0;
+    G.lives = 3;
+    G.streak = 0;
+    G.round = null;
+    G.paused = false;
+    G.totals = { hit: 0, miss: 0, fa: 0, cr: 0 };
+  }
+
+  /* ============================================================
+     5. GO
+     ============================================================ */
+  startGame();
+
+  })();
+  </script>
+</body>
+</html>
+
