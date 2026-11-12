@@ -3486,6 +3486,15 @@ export function buildBeasts() {
     beastNodes.size[ spec.id ] = {
       h: geo.boundingBox.max.y,
       w: Math.max( geo.boundingBox.max.x, geo.boundingBox.max.z ),
+      // the body's own reach along and across the animal and the middle of that
+      // box, kept alongside the height because an animal is long rather than
+      // tall: the pick that decides what a click answers to has to cover the
+      // hide the animal wears rather than a strip through its middle, and the
+      // hide is this box turned to the way the animal is walking
+      cx: ( geo.boundingBox.min.x + geo.boundingBox.max.x ) * 0.5,
+      cz: ( geo.boundingBox.min.z + geo.boundingBox.max.z ) * 0.5,
+      hx: ( geo.boundingBox.max.x - geo.boundingBox.min.x ) * 0.5,
+      hz: ( geo.boundingBox.max.z - geo.boundingBox.min.z ) * 0.5,
     };
   }
 }
@@ -4855,11 +4864,16 @@ export function wireUI() {
   // a stem, against the animal's own body rather than a stalk. A beast is a
   // scene object rather than an instance, so there is no per-instance flag to
   // light for it - the pick only decides what the next click answers to, and it
-  // answers to the animal ahead of the plant standing behind it. The body is a
-  // straight segment from the mud to the top of the merged geometry, which is
-  // what an animal is: it does not bend like a stem, it bobs. The ring is wider
-  // than a stem's 13 px because an animal is wider than a stalk and because a
-  // hand aimed at a beast is a hand that has to be able to reach it.
+  // answers to the animal ahead of the plant standing behind it. The body is the
+  // merged geometry's own box, projected whole and turned to the way the animal
+  // is walking, because an animal is long rather than tall: a hand aimed at a
+  // head, a flank or a rump is a hand aimed at the beast rather than at the
+  // strip through its middle, and at arm's length a bear's own head sits a
+  // hundred px to the side of that strip while its body spans two hundred. The
+  // ring is still wider than a stem's 13 px because an animal is wider than a
+  // stalk and because a hand aimed at a beast is a hand that has to be able to
+  // reach it, and it widens for a fingertip the same way the plant pick and both
+  // blades do.
   function pickBeast( cx, cy, w, h ) {
     hover.beast = null;
     hover.beastX = -1;
@@ -4869,29 +4883,67 @@ export function wireUI() {
     const e = pickMatrix.elements;
     const ex = camera.position.x;
     const ez = camera.position.z;
-    let best = BEAST_RULE.attack.pick; // only an animal this close on the glass counts
+    // a fingertip is sloppier than a cursor, and hover.radius already encodes
+    // how much sloppier: widening the band by the same amount keeps the pick
+    // honest for both hands
+    let best = BEAST_RULE.attack.pick + Math.max( 0, hover.radius - 13 );
     let winner = null;
     let wx = 0;
     let wy = 0;
     for ( const b of beasts.list ) {
       const size = beastNodes.size[ b.spec.id ];
       const base = floorTop( b.x, b.z );
-      const rw = e[ 3 ] * b.x + e[ 7 ] * base + e[ 11 ] * b.z + e[ 15 ];
-      if ( rw <= 0.05 ) continue; // the animal is behind the eye
-      const rx = ( ( e[ 0 ] * b.x + e[ 4 ] * base + e[ 8 ] * b.z + e[ 12 ] ) / rw * 0.5 + 0.5 ) * w;
-      const ry = ( 0.5 - ( e[ 1 ] * b.x + e[ 5 ] * base + e[ 9 ] * b.z + e[ 13 ] ) / rw * 0.5 ) * h;
       const top = base + size.h;
-      const tx = ( ( e[ 0 ] * b.x + e[ 4 ] * top + e[ 8 ] * b.z + e[ 12 ] ) / rw * 0.5 + 0.5 ) * w;
-      const ty = ( 0.5 - ( e[ 1 ] * b.x + e[ 5 ] * top + e[ 9 ] * b.z + e[ 13 ] ) / rw * 0.5 ) * h;
-      const d2 = pointSegD2( cx, cy, rx, ry, tx, ty );
+      // the same turn the mesh wears, so the box the pick answers to is the body
+      // the animal is drawn wearing rather than one square to the stand
+      const yaw = b.heading + b.sway;
+      const cosY = Math.cos( yaw );
+      const sinY = Math.sin( yaw );
+      // the body's own eight corners on the glass, and the box drawn round them:
+      // a corner behind the eye is left out rather than projected wildly, and an
+      // animal whose visible corners are a single point has nothing to answer to
+      let minX = 1e18;
+      let maxX = -1e18;
+      let minY = 1e18;
+      let maxY = -1e18;
+      let seen = 0;
+      for ( let s = 0; s < 4; s++ ) {
+        const lx = size.cx + ( ( s & 1 ) === 0 ? size.hx : -size.hx );
+        const lz = size.cz + ( ( s & 2 ) === 0 ? size.hz : -size.hz );
+        const px = b.x + lx * cosY + lz * sinY;
+        const pz = b.z - lx * sinY + lz * cosY;
+        for ( let q = 0; q < 2; q++ ) {
+          const py = q === 0 ? base : top;
+          const rw = e[ 3 ] * px + e[ 7 ] * py + e[ 11 ] * pz + e[ 15 ];
+          if ( rw <= 0.05 ) continue; // this corner is behind the eye
+          const sx = ( ( e[ 0 ] * px + e[ 4 ] * py + e[ 8 ] * pz + e[ 12 ] ) / rw * 0.5 + 0.5 ) * w;
+          const sy = ( 0.5 - ( e[ 1 ] * px + e[ 5 ] * py + e[ 9 ] * pz + e[ 13 ] ) / rw * 0.5 ) * h;
+          // a corner that has only just cleared the eye projects far off the
+          // glass, and the hide cannot cover glass the animal is not drawn on,
+          // so the box is kept to the glass it stands on
+          if ( sx < minX ) minX = Math.max( sx, -w );
+          if ( sx > maxX ) maxX = Math.min( sx, w * 2 );
+          if ( sy < minY ) minY = Math.max( sy, -h );
+          if ( sy > maxY ) maxY = Math.min( sy, h * 2 );
+          seen = seen + 1;
+        }
+      }
+      if ( seen < 2 ) continue; // the animal is off the glass: nothing to answer to
+      // the cursor's distance to the body's own box on the glass: inside it the
+      // distance is nil, so the pick's margin is what the hand may hang off the
+      // drawn hide by
+      const offX = cx < minX ? minX - cx : cx > maxX ? cx - maxX : 0;
+      const offY = cy < minY ? minY - cy : cy > maxY ? maxY - cy : 0;
       // the same slight bias toward nearer animals the plant pick carries, so an
       // animal far behind another does not win when both sit under the cursor
-      const d = Math.sqrt( d2 ) + Math.hypot( b.x - ex, b.z - ez ) * 0.02;
+      const d = Math.hypot( offX, offY ) + Math.hypot( b.x - ex, b.z - ez ) * 0.02;
       if ( d < best ) {
         best = d;
         winner = b;
-        wx = ( rx + tx ) * 0.5;
-        wy = ( ry + ty ) * 0.5;
+        // the meter floats over the middle of the animal's body rather than over
+        // the cursor, so the gauge reads as the animal's own answer
+        wx = ( minX + maxX ) * 0.5;
+        wy = ( minY + maxY ) * 0.5;
       }
     }
     hover.beast = winner;
